@@ -121,6 +121,17 @@ test('chase staging: player car + all 3 police in frame, police big enough to re
   }
 });
 
+test('chase staging: player car clears the left-rail dialogue panel', () => {
+  // Day 4B moved the dialogue to the left rail (x 10–262, y 152+);
+  // the old bottom-centre band the DIALOGUE_TOP_PX budget measured is
+  // gone, so the real check is horizontal: while the panel is showing,
+  // no car corner may fall inside the rail's x-range.
+  const world = stagedChaseWorld();
+  const pose = chaseCameraPose(world.playerCar);
+  const player = frameCar(pose, fovForSpeed(28.7), ASPECT, world.playerCar);
+  assert.ok(player.minX > 262, `chase car left edge ${player.minX.toFixed(0)}px must clear the dialogue rail (right edge 262px)`);
+});
+
 test('chase staging: closer than Day 1-2B (lead ~12, flank ~5, third ~19)', () => {
   const world = stagedChaseWorld();
   const car = world.playerCar;

@@ -105,7 +105,9 @@ function signAtlas() {
   const g = c.getContext('2d');
   g.fillStyle = '#20242c';
   g.fillRect(0, 0, c.width, c.height);
-  g.font = 'bold 20px sans-serif';
+  // Sign lettering, 26 px bold: at 20 px the shop names dissolved
+  // into grey smudges at 768x480; the bigger glyphs stay readable.
+  g.font = 'bold 26px sans-serif';
   g.textBaseline = 'middle';
   SIGN_NAMES.forEach((name, i) => {
     g.fillStyle = i % 2 === 0 ? '#ffd98a' : '#e8e8e8';
@@ -168,10 +170,11 @@ export function buildScene(city, gradeName, shadowName) {
 
   const half = city.half, size = city.size;
 
-  // Ground: city grass-concrete base, then roads, sidewalks, sand, ocean.
+  // Ground: dry warm earth. The old olive-green base read as a flat
+  // green strip at the horizon past the city edge.
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(size + 700, size + 200),
-    new THREE.MeshLambertMaterial({ color: 0x8a9a6a }),
+    new THREE.MeshLambertMaterial({ color: 0xbfae8e }),
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.set(-60, 0, 0);
@@ -249,16 +252,30 @@ export function buildScene(city, gradeName, shadowName) {
     const marks = new THREE.InstancedMesh(markGeo, markMat, Math.max(1, total));
     const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion();
     const p3 = new THREE.Vector3(), s3 = new THREE.Vector3();
+    // Per-instance colours: the zebra stripes are dimmed to mid-grey
+    // (full white blew out the whole foreground of the driving shots)
+    // and narrowed a touch. Every instance gets an explicit colour —
+    // setColorAt allocates a zero-filled buffer, so anything left
+    // unset would render black.
+    const markCol = new THREE.Color();
     let mi = 0;
     const put = (x, z, sx, sz) => {
       p3.set(x, 0.045, z); s3.set(sx, 0.02, sz);
-      m4.compose(p3, q0, s3); marks.setMatrixAt(mi++, m4);
+      m4.compose(p3, q0, s3); marks.setMatrixAt(mi, m4);
+      marks.setColorAt(mi, markCol.setHex(0xffffff));
+      mi += 1;
+    };
+    const putZebra = (x, z, sx, sz) => {
+      p3.set(x, 0.045, z); s3.set(sx, 0.02, sz);
+      m4.compose(p3, q0, s3); marks.setMatrixAt(mi, m4);
+      marks.setColorAt(mi, markCol.setHex(0x8f8f8f));
+      mi += 1;
     };
     for (const d of city.laneDashes) {
       if (d.axis === 'x') put(d.x, d.z, 3, 0.25); else put(d.x, d.z, 0.25, 3);
     }
     for (const c of city.crosswalks) {
-      if (c.axis === 'x') put(c.x, c.z, 0.55, 3); else put(c.x, c.z, 3, 0.55);
+      if (c.axis === 'x') putZebra(c.x, c.z, 0.5, 2.8); else putZebra(c.x, c.z, 2.8, 0.5);
     }
     for (const s of city.stopLines) {
       if (s.axis === 'x') put(s.x, s.z, 4.5, 0.5); else put(s.x, s.z, 0.5, 4.5);
@@ -388,13 +405,15 @@ export function buildScene(city, gradeName, shadowName) {
   const trunkGeo = new THREE.CylinderGeometry(0.22, 0.35, 1, 6);
   const trunkMat = new THREE.MeshLambertMaterial({ color: 0x8a6a48 });
   const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, city.palms.length);
-  const canopyGeo = new THREE.ConeGeometry(2.2, 2.4, 7);
+  // Palm crowns: squashed spheres, not cones — the old cone canopy
+  // read as a pine-cone at 768x480.
+  const canopyGeo = new THREE.SphereGeometry(2.2, 10, 8);
   const canopyMat = new THREE.MeshLambertMaterial({ color: 0x3f8a4a });
   const canopies = new THREE.InstancedMesh(canopyGeo, canopyMat, city.palms.length);
   city.palms.forEach((t, i) => {
     p.set(t.x, t.h / 2, t.z); s.set(1, t.h, 1);
     m.compose(p, q, s); trunks.setMatrixAt(i, m);
-    p.set(t.x, t.h + 1.1, t.z); s.set(1, 1, 1);
+    p.set(t.x, t.h + 0.9, t.z); s.set(1.15, 0.55, 1.15);
     m.compose(p, q, s); canopies.setMatrixAt(i, m);
   });
   trunks.castShadow = sh.casters.palmTrunks;
@@ -478,6 +497,25 @@ export function buildScene(city, gradeName, shadowName) {
     const boardGeo = new THREE.BoxGeometry(1, 1, 1);
     const boardMat = new THREE.MeshLambertMaterial({ color: 0x20242c });
     const boards = new THREE.InstancedMesh(boardGeo, boardMat, city.shops.length);
+    // These two meshes used to ship with NO matrices at all, so every
+    // instance sat as a 1 m identity box at the world origin — one
+    // white, one dark, half-buried at (0, 0, 0), which projects
+    // inside the vista frame. Give each shop a real awning (its own
+    // colour, jutting toward the road below the sign) and a real dark
+    // board backing the name plane.
+    {
+      const awnCol = new THREE.Color();
+      city.shops.forEach((shop, i) => {
+        p.set(shop.x, 3.0, shop.z + 0.55); s.set(5.0, 0.3, 1.3);
+        m.compose(p, q, s); awnings.setMatrixAt(i, m);
+        awnings.setColorAt(i, awnCol.setHex(shop.awning));
+        p.set(shop.x, 3.6, shop.z + 0.6); s.set(5.2, 0.85, 0.12);
+        m.compose(p, q, s); boards.setMatrixAt(i, m);
+      });
+      awnings.instanceMatrix.needsUpdate = true;
+      boards.instanceMatrix.needsUpdate = true;
+      if (awnings.instanceColor) awnings.instanceColor.needsUpdate = true;
+    }
     const atlas = signAtlas();
     const signMat = new THREE.MeshBasicMaterial({ map: atlas });
     // All name planes merged into ONE geometry (one draw call, not one
@@ -491,10 +529,16 @@ export function buildScene(city, gradeName, shadowName) {
         const y0 = 1 - (sIdx + 1) / SIGN_NAMES.length;
         const y1 = 1 - sIdx / SIGN_NAMES.length;
         const cx = shop.x, cy = 3.6, cz = shop.z + 0.72;
-        const hw = 2.1, hh = 0.275;
+        // Wider/taller name plane (4.2 -> 5.0 m) to match the bigger
+        // atlas lettering.
+        const hw = 2.5, hh = 0.34;
         pos.push(cx - hw, cy + hh, cz, cx + hw, cy + hh, cz, cx - hw, cy - hh, cz, cx + hw, cy - hh, cz);
         uv.push(0, y1, 1, y1, 0, y0, 1, y0);
-        idx.push(vi, vi + 1, vi + 2, vi + 1, vi + 3, vi + 2);
+        // Winding flipped: the old (0,1,2) order gave a -z normal, so
+        // the signs faced INTO the block and were backface-culled
+        // from the road — no sign was ever visible. The front face
+        // must point +z (south, toward the road).
+        idx.push(vi, vi + 2, vi + 1, vi + 1, vi + 2, vi + 3);
         vi += 4;
       }
       const geo = new THREE.BufferGeometry();

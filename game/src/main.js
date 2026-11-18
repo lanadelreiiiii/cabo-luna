@@ -1,9 +1,10 @@
 // Cabo Luna — boot and the one loop.
 // Input is read every frame, the world advances in fixed 1/60 s steps, and
 // the renderer paints what is there. Screens: title -> play -> paused ->
-// game over. ?seed=N fixes the city. ?shot=start|play|chase|end (with
-// &seed=N) stages that scene instead of running the loop, paints it twice
-// and sets window.__shotReady for a screenshot.
+// game over. ?seed=N fixes the city. ?shot=start|play|chase|end
+// (legacy) or hero|foot|combat|vista (Day 4E A/B/C/D dossier shots)
+// with &seed=N stages that scene instead of running the loop, paints
+// it twice and sets window.__shotReady for a screenshot.
 import * as THREE from 'three';
 import { STEP, SEED_DEFAULT, WORLD, CAMERA, VEHICLE, VEHICLE_CONFIGS, wantedFromHeat, resolveShadow } from './config.js';
 import { generateCity, districtAtPoint, buildingColliders } from './city.js';
@@ -216,6 +217,12 @@ function refreshDerived() {
     ? 'WASD move · E enter car · F fire · Q weapon'
     : 'W/S drive · A/D steer · Space brake · E exit';
   state.combat = combat ? { ...getAmmo(combat), kills: combat.kills, hitMarker: combat.hitMarkerTimer > 0 } : null;
+  // Crosshair aim state: the crosshair shows only when the player is
+  // on foot AND aiming matters — an enemy is present, or a shot /
+  // hit marker is still live. On foot with no enemy it used to sit on
+  // the player's chest in every still; while driving it was already
+  // hidden (hud.js reads this flag).
+  state.aiming = !!combat && (combat.enemies.length > 0 || combat.muzzleTimer > 0 || combat.hitMarkerTimer > 0);
   // HUD (Day 4B): car name for the speed panel + the interaction prompt.
   // On foot near an enterable car, the prompt names the car to steal.
   state.carName = world.playerCar

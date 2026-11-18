@@ -83,13 +83,14 @@ test('patrol line: shared state stated once, all units + distances present', () 
   }));
   const t = els['hud-patrol'].textContent;
   assert.equal(els['hud-patrol'].hidden, false);
-  assert.match(t, /Patrol 3 · CHASE/);
-  assert.match(t, /Luna-1\s13m/);
+  assert.match(t, /CHASE — Luna-1\s13m/);
   assert.match(t, /Luna-2\s5m/);
   assert.match(t, /Luna-3\s19m/);
   // State appears once, not once per unit (the old format repeated it
   // three times and the line clipped at the panel edge).
   assert.equal(t.split('CHASE').length - 1, 1);
+  // No "Patrol N" prefix: it pushed the line past the panel edge.
+  assert.doesNotMatch(t, /Patrol/);
 });
 
 test('patrol line: mixed states keep each unit state; hidden when not wanted', () => {
@@ -102,17 +103,39 @@ test('patrol line: mixed states keep each unit state; hidden when not wanted', (
     ],
   }));
   const t = els['hud-patrol'].textContent;
-  assert.match(t, /Luna-1\s174m\sPATROL/);
-  assert.match(t, /Luna-2\s78m\sSEARCH/);
+  assert.match(t, /Luna-1\s174m\sP/);
+  assert.match(t, /Luna-2\s78m\sS/);
+  // Single letters, not the full words — the full words wrapped the
+  // line to two rows when states were mixed.
+  assert.doesNotMatch(t, /PATROL/);
+  assert.doesNotMatch(t, /SEARCH/);
   hud.update(baseState({ wanted: 0, police: [] }));
   assert.equal(els['hud-patrol'].hidden, true);
 });
 
-test('crosshair: hidden while driving, shown on foot with weapon ready', () => {
+test('patrol line: four units collapse to three + count, still one line', () => {
+  const hud = mount();
+  hud.update(baseState({
+    wanted: 3,
+    police: [
+      { name: 'Unit Luna-1', dist: 43, state: 'PATROL' },
+      { name: 'Unit Luna-2', dist: 43, state: 'PATROL' },
+      { name: 'Unit Luna-3', dist: 43, state: 'PATROL' },
+      { name: 'Unit Luna-4', dist: 43, state: 'PATROL' },
+    ],
+  }));
+  const t = els['hud-patrol'].textContent;
+  assert.match(t, /PATROL — Luna-1\s43m · Luna-2\s43m · Luna-3\s43m \+1/);
+  assert.doesNotMatch(t, /Luna-4/);
+});
+
+test('crosshair: hidden while driving, hidden on foot with nothing to aim at, shown when aiming', () => {
   const hud = mount();
   hud.update(baseState({ onFoot: false, speedKmh: 103, carName: 'BRISA GT' }));
   assert.equal(els['hud-crosshair'].hidden, true);
-  hud.update(baseState({ onFoot: true }));
+  hud.update(baseState({ onFoot: true, aiming: false }));
+  assert.equal(els['hud-crosshair'].hidden, true);
+  hud.update(baseState({ onFoot: true, aiming: true }));
   assert.equal(els['hud-crosshair'].hidden, false);
 });
 
@@ -125,6 +148,7 @@ test('crosshair: hit marker only shows while the crosshair is visible', () => {
   assert.equal(els['hud-crosshair'].classList.contains('hit'), false);
   hud.update(baseState({
     onFoot: true,
+    aiming: true,
     combat: { name: 'Luna-9', mag: 11, reserve: 48, reloading: false, hitMarker: true },
   }));
   assert.equal(els['hud-crosshair'].classList.contains('hit'), true);
@@ -154,7 +178,7 @@ test('interact prompt: only while an interaction is available', () => {
   const hud = mount();
   hud.update(baseState({ interact: '' }));
   assert.equal(els['hud-interact'].hidden, true);
-  hud.update(baseState({ onFoot: true, interact: 'E — STEAL BRISA GT' }));
+  hud.update(baseState({ onFoot: true, aiming: true, interact: 'E — STEAL BRISA GT' }));
   assert.equal(els['hud-interact'].hidden, false);
   assert.equal(els['hud-interact'].textContent, 'E — STEAL BRISA GT');
   assert.equal(els['hud-crosshair'].classList.contains('interact'), true);

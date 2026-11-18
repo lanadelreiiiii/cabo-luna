@@ -5,8 +5,10 @@
 // centre health. Compact on purpose — it must not wrap at 768px wide.
 // Day 4B: patrol line wraps in a widened panel (state stated once),
 // dialogue moved to the left rail (off the road/car), crosshair only
-// on foot, interaction prompt + car name added. Crosshair rule: on
-// foot = weapon ready = shown; driving = hidden (no aim input in car).
+// on foot while aiming matters (an enemy is present or a shot/marker is
+// live), interaction prompt + car name added. Crosshair rule: on foot
+// AND aiming = shown; driving, or on foot with nothing to aim at =
+// hidden.
 import { districtAtPoint, streetAtPoint } from './city.js';
 import { lightPhase } from './police.js';
 
@@ -95,31 +97,33 @@ export function createHud(city) {
       g.moveTo(kx, ky - 5); g.lineTo(kx + 5, ky); g.lineTo(kx, ky + 5); g.lineTo(kx - 5, ky);
       g.closePath(); g.fill();
     }
-    // Traffic cars: pale dots. The player's car (when driving) is red.
+    // Traffic cars: pale dots, bumped a notch (2 -> 2.5 px) — at
+    // 104 px across, the old dots were hard to pick out.
     if (trafficCars) {
       g.fillStyle = '#cfd8dc';
       for (const c of trafficCars) {
         const [cx, cy] = toMap(c.x, c.z);
-        g.beginPath(); g.arc(cx, cy, 2, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(cx, cy, 2.5, 0, Math.PI * 2); g.fill();
       }
     }
     // Patrol units: blue dots with a red ring, flashing in phase with
-    // the roof light bars.
+    // the roof light bars. Dots 3 -> 3.5 px, rings 5 -> 5.5 px.
     if (police) {
       const phase = lightPhase(flashTime ?? 0);
       for (const u of police) {
         const [cx, cy] = toMap(u.x, u.z);
         g.fillStyle = '#3d8bff';
-        g.beginPath(); g.arc(cx, cy, 3, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(cx, cy, 3.5, 0, Math.PI * 2); g.fill();
         g.strokeStyle = phase === 0 ? '#ff2020' : '#2040ff';
         g.lineWidth = 1.5;
-        g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2); g.stroke();
+        g.beginPath(); g.arc(cx, cy, 5.5, 0, Math.PI * 2); g.stroke();
       }
     }
     // Player dot + facing wedge (on foot), or the player car (driving).
+    // Player dot 4 -> 4.5 px.
     const [pxm, pzm] = toMap(playerCar ? playerCar.x : px, playerCar ? playerCar.z : pz);
     g.fillStyle = '#ff5a3d';
-    g.beginPath(); g.arc(pxm, pzm, 4, 0, Math.PI * 2); g.fill();
+    g.beginPath(); g.arc(pxm, pzm, 4.5, 0, Math.PI * 2); g.fill();
     if (!playerCar) {
       g.strokeStyle = '#ffffff'; g.lineWidth = 1.5;
       g.beginPath(); g.moveTo(pxm, pzm);
@@ -148,11 +152,13 @@ export function createHud(city) {
       el.speed.textContent = `${Math.round(state.speedKmh)}`;
       el.car.textContent = state.carName || '';
       // Combat HUD: crosshair + ammo counter. The crosshair is
-      // CONTEXTUAL (Day 4B): shown only on foot, when the player has a
-      // weapon ready. While driving it sat on the car's roof and meant
-      // nothing — there is no aim input in the car, so it stays hidden.
+      // CONTEXTUAL (Day 4B, tightened now): shown only on foot while
+      // aiming matters — an enemy is present, or a shot / hit marker
+      // is live (state.aiming, set by main.js). On foot with nothing
+      // to aim at it sat on the player's chest in every still; while
+      // driving it stays hidden (no aim input in the car).
       // The hit marker only ever shows while the crosshair is visible.
-      const aiming = !!state.onFoot;
+      const aiming = !!state.onFoot && !!state.aiming;
       el.crosshair.hidden = !aiming;
       el.crosshair.classList.toggle('interact', aiming && !!state.interact);
       // Interaction prompt: only while an interaction is available
@@ -209,11 +215,11 @@ export function createHud(city) {
         el.dialogue.hidden = true;
       }
       // Patrol response line, only while wanted: per-unit distance +
-      // status. Day 4B: the state is stated ONCE when every unit shares
-      // it ("Patrol 3 · CHASE — Luna-1 13m · Luna-2 5m · Luna-3 19m")
-      // instead of repeating CHASE three times, and the CSS lets the
-      // line wrap inside the widened panel — the old nowrap line was
-      // clipped at the panel's right edge at 768 px.
+      // status. The state is stated ONCE when every unit shares it
+      // ("CHASE — Luna-1 13m · Luna-2 5m · Luna-3 19m") instead of
+      // repeating CHASE three times, with no "Patrol N" prefix (it
+      // pushed the line past the panel edge at 768 px); mixed states
+      // get one letter per unit (P/C/S).
       if (state.wanted >= 1 && state.police && state.police.length > 0) {
         const units = state.police.map((u) => ({
           name: u.name.replace('Unit ', ''), dist: u.dist, state: u.state,
@@ -221,11 +227,23 @@ export function createHud(city) {
         const states = [...new Set(units.map((u) => u.state))];
         // Non-breaking spaces inside each unit bit, so a wrap can only
         // happen at the '·' separators — never mid-unit ("Luna-3" on
-        // one line, "19m" on the next).
-        const bits = units.map((u) => `${u.name}\u00A0${u.dist}m${states.length === 1 ? '' : `\u00A0${u.state}`}`).join(' · ');
+        // one line, "19m" on the next). The "Patrol N · " prefix is
+        // dropped — at 11 px it measured ~290 px unwrapped inside a
+        // 280 px inner panel and forced a wrap; the shared state word
+        // plus the unit bits fit on one line at ~225 px, and the unit
+        // count is already on the minimap. Mixed states use one
+        // letter each (P/C/S) instead of the full word. And when more
+        // than three units are out, only the first three are listed
+        // with a "+N" tail — a fourth unit pushed the line to two
+        // rows in the combat shot, and the minimap still shows all
+        // of them.
+        const shown = units.slice(0, 3);
+        const extra = units.length - shown.length;
+        const bits = shown.map((u) => `${u.name}\u00A0${u.dist}m${states.length === 1 ? '' : `\u00A0${u.state[0]}`}`).join(' · ')
+          + (extra > 0 ? ` +${extra}` : '');
         el.patrol.textContent = states.length === 1
-          ? `Patrol ${units.length} · ${states[0]} — ${bits}`
-          : `Patrol ${units.length} — ${bits}`;
+          ? `${states[0]} — ${bits}`
+          : bits;
         el.patrol.hidden = false;
       } else {
         el.patrol.textContent = '';

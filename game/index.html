@@ -31,6 +31,11 @@
      shared state is stated once ("Patrol 3 · CHASE — …") and the per-unit
      bits wrap to a second line instead of being cut off. */
   #hud-patrol { margin-top: 3px; color: #ff8a7a; font-size: 11px; line-height: 1.4; }
+  /* THE CITY REMEMBERS (Day 4D): witness alert + district-heat rows
+     inside the mission panel — same panel, no layout moves. */
+  #hud-witness { margin-top: 3px; color: #ff5a4a; font-size: 11px; font-weight: 800; letter-spacing: 1px; line-height: 1.4; }
+  #hud-witness.good { color: #7dff9a; }
+  #hud-memory { margin-top: 2px; color: #ffb02d; font-size: 11px; line-height: 1.4; }
   #hud-tr { position: absolute; top: 10px; right: 10px; text-align: right; }
   #hud-money { font-size: 20px; font-weight: 800; color: #7dff9a; }
   #hud-clock { margin-top: 2px; color: #cfe5ff; }
@@ -120,6 +125,8 @@
       <div id="hud-objective"></div>
       <div id="hud-wanted">☆☆☆☆☆</div>
       <div id="hud-patrol" hidden></div>
+      <div id="hud-witness" hidden></div>
+      <div id="hud-memory" hidden></div>
     </div>
   </div>
   <div id="hud-tr">

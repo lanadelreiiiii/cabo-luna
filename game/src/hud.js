@@ -19,6 +19,7 @@ export function createHud(city) {
     healthFill: $('hud-health-fill'), healthText: $('hud-health-text'),
     speed: $('hud-speed'), car: $('hud-car'), mode: $('hud-mode'), banner: $('hud-banner'),
     minimap: $('hud-minimap'), hint: $('hud-hint'), patrol: $('hud-patrol'),
+    witness: $('hud-witness'), memoryLine: $('hud-memory'),
     dialogue: $('hud-dialogue'), speaker: $('hud-dialogue-speaker'),
     dialogueText: $('hud-dialogue-text'),
     choice0: $('hud-choice-0'), choice1: $('hud-choice-1'),
@@ -38,7 +39,7 @@ export function createHud(city) {
     return out;
   }
 
-  function drawMinimap(px, pz, yaw, trafficCars, playerCar, police, flashTime) {
+  function drawMinimap(px, pz, yaw, trafficCars, playerCar, police, flashTime, extra) {
     const g = mapCtx;
     const scale = mapSize / (city.size + 80);
     const toMap = (x, z) => [mapSize / 2 + (x - 0) * scale, mapSize / 2 + (z - 0) * scale];
@@ -71,6 +72,29 @@ export function createHud(city) {
     const [lx, ly] = toMap(city.landmark.x, city.landmark.z);
     g.fillStyle = '#ffd98a';
     g.beginPath(); g.arc(lx, ly, 3, 0, Math.PI * 2); g.fill();
+    // THE CITY REMEMBERS (Day 4D): garage (green square) + safehouse
+    // (green ring) so the player can find the two escapes, and the
+    // last-known-location (amber diamond) so the player can see where
+    // the police think they are.
+    if (extra?.garage) {
+      const [gx, gy] = toMap(extra.garage.x, extra.garage.z);
+      g.fillStyle = '#57d977';
+      g.fillRect(gx - 3, gy - 3, 6, 6);
+    }
+    if (extra?.safehouse) {
+      const [sx, sy] = toMap(extra.safehouse.x, extra.safehouse.z);
+      g.strokeStyle = '#57d977'; g.lineWidth = 2;
+      g.beginPath(); g.arc(sx, sy, 4, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = '#57d977';
+      g.beginPath(); g.arc(sx, sy, 1.5, 0, Math.PI * 2); g.fill();
+    }
+    if (extra?.lastKnown) {
+      const [kx, ky] = toMap(extra.lastKnown.x, extra.lastKnown.z);
+      g.fillStyle = '#ffb02d';
+      g.beginPath();
+      g.moveTo(kx, ky - 5); g.lineTo(kx + 5, ky); g.lineTo(kx, ky + 5); g.lineTo(kx - 5, ky);
+      g.closePath(); g.fill();
+    }
     // Traffic cars: pale dots. The player's car (when driving) is red.
     if (trafficCars) {
       g.fillStyle = '#cfd8dc';
@@ -207,7 +231,36 @@ export function createHud(city) {
         el.patrol.textContent = '';
         el.patrol.hidden = true;
       }
-      drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar, state.police, state.flashTime);
+      // THE CITY REMEMBERS (Day 4D): a fresh escape flash wins, then
+      // the witness alert, then the district-heat / wanted-car line.
+      // All three share the two new rows so the 4B layout never moves.
+      if (state.memoryFlash) {
+        el.witness.textContent = state.memoryFlash;
+        el.witness.hidden = false;
+        el.witness.classList.add('good');
+      } else if (state.witnessAlert) {
+        el.witness.textContent = 'SEEN! A WITNESS SPOTTED YOU';
+        el.witness.hidden = false;
+        el.witness.classList.remove('good');
+      } else {
+        el.witness.textContent = '';
+        el.witness.hidden = true;
+      }
+      if (state.wanted >= 1 || (state.districtHeatLevel ?? 0) > 0) {
+        const pips = '●'.repeat(state.districtHeatLevel ?? 0) + '○'.repeat(5 - (state.districtHeatLevel ?? 0));
+        const car = state.identifiedVehicle
+          ? ` · ${state.identifiedVehicle.name.toUpperCase()}`
+          : '';
+        el.memoryLine.textContent = `${district} heat ${pips}${car}`;
+        el.memoryLine.hidden = false;
+      } else {
+        el.memoryLine.textContent = '';
+        el.memoryLine.hidden = true;
+      }
+      drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar, state.police, state.flashTime, {
+        lastKnown: state.wanted > 0 ? state.lastKnown : null,
+        garage: state.garage, safehouse: state.safehouse,
+      });
     },
     showScreen(screen) {
       document.getElementById('screen-title').hidden = screen !== 'title';

@@ -12,6 +12,7 @@
 // searching they drive to the last seen spot. Wanted heat decays only
 // while nobody sees the player. Everything flows from the seeded RNG.
 import { POLICE, wantedFromHeat } from './config.js';
+import { districtAtPoint } from './city.js';
 import { astar, nearestNode, pathToLaneWaypoints } from './roadgraph.js';
 import { createVehicle, stepVehicle } from './vehicles.js';
 
@@ -113,6 +114,10 @@ function spawnUnit(manager, px, pz) {
     unseenTimer: 0,
     lastKnown: null,
     searchTimer: 0,
+    searchTarget: null,
+    sweepsLeft: 0,
+    investigateTarget: null,
+    investigateTimer: 0,
     replanTimer: 0,
     waypoints: [],
     wpIndex: 0,
@@ -124,11 +129,18 @@ function spawnUnit(manager, px, pz) {
 }
 
 // Grow the force to the cap for the current wanted level:
-// wanted + 1 units, at most POLICE.maxUnits. Never teleports a unit
-// that already exists; new units spawn in the ring around the player.
-export function ensureUnits(manager, wanted, px, pz) {
+// wanted + 1 units, at most POLICE.maxUnits — plus one more when the
+// district the player is in is hot (Day 4D: district heat answers
+// harder). Never teleports a unit that already exists; new units spawn
+// in the ring around the player.
+export function ensureUnits(manager, wanted, px, pz, memory = null) {
   if (wanted <= 0) return;
-  const want = Math.min(POLICE.maxUnits, wanted + 1);
+  let want = wanted + 1;
+  if (memory && manager.city) {
+    const district = districtAtPoint(manager.city, px, pz);
+    if ((memory.districtHeat?.[district] ?? 0) >= 60) want += 1;
+  }
+  want = Math.min(POLICE.maxUnits, want);
   while (manager.units.length < want) spawnUnit(manager, px, pz);
 }
 
@@ -139,7 +151,17 @@ function stepUnit(manager, unit, dt, player, wanted) {
   const dist = Math.hypot(player.x - car.x, player.z - car.z);
   const radius = POLICE.detectRadius[wanted] ?? 0;
   const inRange = wanted > 0 && dist <= radius;
-  const seen = inRange && hasLineOfSight(car.x, car.z, player.x, player.z, manager.colliders);
+  let seen = inRange && hasLineOfSight(car.x, car.z, player.x, player.z, manager.colliders);
+  // Day 4D — vehicle identification: the police look for the identified
+  // crime vehicle. A player driving a DIFFERENT car is not the target
+  // they are looking for, so they do not see "the suspect" — on foot
+  // (player.car null) the person is still recognised. No memory wired
+  // in (memory null) means the old behaviour: any sighting counts.
+  const memory = manager.memory ?? null;
+  if (seen && memory?.identifiedVehicle && player.car
+    && player.car.id !== memory.identifiedVehicle.id) {
+    seen = false;
+  }
   if (seen) {
     unit.lastKnown = { x: player.x, z: player.z };
     unit.unseenTimer = 0;
@@ -166,7 +188,7 @@ function stepUnit(manager, unit, dt, player, wanted) {
   // --- chase branch: seen now, or still inside the unseen grace ----
   const chaseValid = seen || (unit.state === 'CHASE' && unit.unseenTimer <= POLICE.unseenGrace);
   if (chaseValid) {
-    if (unit.state !== 'CHASE') { unit.state = 'CHASE'; unit.stateTimer = 0; unit.replanTimer = 0; }
+    if (unit.state !== 'CHASE') { unit.state = 'CHASE'; unit.stateTimer = 0; unit.replanTimer = 0; unit.investigateTarget = null; }
     unit.replanTimer -= dt;
     if (unit.replanTimer <= 0 || unit.wpIndex >= unit.waypoints.length) {
       unit.waypoints = planRoute(manager, unit, player.x, player.z);
@@ -202,31 +224,98 @@ function stepUnit(manager, unit, dt, player, wanted) {
     return seen;
   }
 
-  // --- search branch: drive to the last known spot, then give up ----
+  // --- investigate branch (Day 4D): a witness report sent this unit
+  // to the reported location. It drives there and looks around; a
+  // sighting on the way still promotes it to CHASE (the chase branch
+  // above runs first), and when the look-around ends with wanted still
+  // up it falls back to SEARCH on the last-known-location.
+  if (unit.investigateTarget && (unit.state === 'PATROL' || unit.state === 'INVESTIGATE')) {
+    if (unit.state !== 'INVESTIGATE') {
+      unit.state = 'INVESTIGATE';
+      unit.stateTimer = 0;
+      unit.investigateTimer = 6;
+      unit.replanTimer = 0;
+    }
+    unit.investigateTimer -= dt;
+    const target = unit.investigateTarget;
+    unit.replanTimer -= dt;
+    if (unit.replanTimer <= 0 || unit.wpIndex >= unit.waypoints.length) {
+      unit.waypoints = planRoute(manager, unit, target.x, target.z);
+      unit.wpIndex = 0;
+      unit.replanTimer = POLICE.replanInterval;
+    }
+    let arrived = false;
+    if (unit.wpIndex < unit.waypoints.length) {
+      const wp = unit.waypoints[unit.wpIndex];
+      if (driveToward(unit, wp.x, wp.z, POLICE.searchSpeed, dt, manager.colliders)) unit.wpIndex += 1;
+    } else {
+      arrived = driveToward(unit, target.x, target.z, POLICE.searchSpeed, dt, manager.colliders);
+    }
+    if (arrived || unit.investigateTimer <= 0) {
+      unit.investigateTarget = null;
+      if (wanted > 0 && unit.lastKnown) {
+        unit.state = 'SEARCH';
+        unit.stateTimer = 0;
+        unit.searchTimer = POLICE.searchTime;
+        unit.searchTarget = { ...unit.lastKnown };
+        unit.sweepsLeft = 1;
+        unit.waypoints = planRoute(manager, unit, unit.lastKnown.x, unit.lastKnown.z);
+        unit.wpIndex = 0;
+      } else {
+        unit.state = 'PATROL';
+        unit.stateTimer = 0;
+        unit.lastKnown = null;
+        unit.patrolTarget = { x: car.x, z: car.z };
+      }
+    }
+    return seen;
+  }
+
+  // --- search branch: drive to the last known spot, sweep around it,
+  // then give up. Day 4D: the anchor is the memory last-known-location
+  // when the unit has none of its own, and after reaching it the unit
+  // sweeps one nearby point inside the search radius before giving up.
   if (unit.state === 'CHASE' && unit.unseenTimer > POLICE.unseenGrace) {
     unit.state = 'SEARCH';
     unit.stateTimer = 0;
     unit.searchTimer = POLICE.searchTime;
+    if (!unit.lastKnown && memory?.lastKnown) unit.lastKnown = { ...memory.lastKnown };
+    unit.searchTarget = unit.lastKnown ? { ...unit.lastKnown } : null;
+    unit.sweepsLeft = 1;
     unit.waypoints = unit.lastKnown ? planRoute(manager, unit, unit.lastKnown.x, unit.lastKnown.z) : [];
     unit.wpIndex = 0;
   }
   if (unit.state === 'SEARCH') {
     unit.searchTimer -= dt;
+    const anchor = unit.lastKnown ?? memory?.lastKnown ?? null;
+    if (!unit.searchTarget) unit.searchTarget = anchor ? { ...anchor } : null;
     let arrived = false;
-    if (unit.lastKnown) {
+    if (unit.searchTarget) {
       if (unit.wpIndex < unit.waypoints.length) {
         const wp = unit.waypoints[unit.wpIndex];
         if (driveToward(unit, wp.x, wp.z, POLICE.searchSpeed, dt, manager.colliders)) unit.wpIndex += 1;
       } else {
-        arrived = driveToward(unit, unit.lastKnown.x, unit.lastKnown.z, POLICE.searchSpeed, dt, manager.colliders);
+        arrived = driveToward(unit, unit.searchTarget.x, unit.searchTarget.z, POLICE.searchSpeed, dt, manager.colliders);
       }
     } else {
       arrived = true;
+    }
+    if (arrived && unit.searchTimer > 0 && unit.sweepsLeft > 0 && anchor) {
+      // Sweep: one more look around the last-known-location before
+      // giving up, at a seeded offset inside the search radius.
+      unit.sweepsLeft -= 1;
+      const a = manager.rng.next() * Math.PI * 2;
+      const r = 6 + manager.rng.next() * 8;
+      unit.searchTarget = { x: anchor.x + Math.cos(a) * r, z: anchor.z + Math.sin(a) * r };
+      unit.waypoints = planRoute(manager, unit, unit.searchTarget.x, unit.searchTarget.z);
+      unit.wpIndex = 0;
+      arrived = false;
     }
     if (arrived || unit.searchTimer <= 0) {
       unit.state = 'PATROL';
       unit.stateTimer = 0;
       unit.lastKnown = null;
+      unit.searchTarget = null;
       unit.patrolTarget = { x: car.x, z: car.z };
     }
     return seen;
@@ -253,14 +342,31 @@ function stepUnit(manager, unit, dt, player, wanted) {
 // Advance the whole force one fixed step.
 // player: { x, z, speed, vx, vz, car? } — the live player position and
 // velocity. heatState: { crimeHeat, wanted } — mutated in place by
-// decay (and read for the wanted level). Returns the manager.
-export function stepPolice(manager, dt, player, heatState) {
+// decay (and read for the wanted level). memory (optional, Day 4D):
+// the city memory — sightings update its last-known-location, its
+// district heat can hold wanted up, and its identified vehicle decides
+// whether a sighting counts as the suspect. Returns the manager.
+export function stepPolice(manager, dt, player, heatState, memory = null) {
   manager.elapsed += dt;
+  if (memory) {
+    manager.memory = memory;
+    // Escalation driven by memory: a hot district holds wanted up even
+    // after the global heat has decayed.
+    const district = districtAtPoint(manager.city, player.x, player.z);
+    const districtWanted = wantedFromHeat(memory.districtHeat?.[district] ?? 0);
+    if (districtWanted > heatState.wanted) heatState.wanted = districtWanted;
+  }
   const wanted = heatState.wanted;
-  ensureUnits(manager, wanted, player.x, player.z);
+  ensureUnits(manager, wanted, player.x, player.z, memory);
   let anySeen = false;
   for (const unit of manager.units) {
     if (stepUnit(manager, unit, dt, player, wanted)) anySeen = true;
+  }
+  // Every sighting refreshes the memory last-known-location (on the
+  // memory's own clock, advanced by stepMemory each tick).
+  if (anySeen && memory) {
+    memory.lastKnown = { x: player.x, z: player.z };
+    memory.lastKnownAt = memory.elapsed;
   }
   // Heat decay: only while nobody sees the player, and only after
   // the delay has passed without a sighting.

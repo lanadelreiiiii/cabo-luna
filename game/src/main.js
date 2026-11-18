@@ -13,6 +13,10 @@ import { createVehicle, stepVehicle, nearestEnterableCar, applySteal, resetVehic
 import { createTrafficManager, stepTraffic, createPedestrianManager, stepPedestrians, triggerFlee } from './traffic.js';
 import { createPoliceManager, stepPolice, addCollisionCrime, policeStatus } from './police.js';
 import { POLICE, COMBAT } from './config.js';
+import {
+  createMemory, resetMemory, recordCrime, stepMemory, tryGarageEscape,
+  isDirectlyObserved, onVehicleSwitch, memoryHud, GARAGE, SAFEHOUSE,
+} from './city-remembers.js';
 import { createCombatManager, spawnHarborGuards, fire as combatFire, stepCombat, cycleWeapon, switchWeapon, startReload, getAmmo } from './combat.js';
 import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
@@ -71,6 +75,12 @@ function buildParkedCars() {
   return kinds.map((kind, i) => createVehicle(kind, xs[i], 113, Math.PI / 2, { parked: true }));
 }
 
+// THE CITY REMEMBERS (Day 4D): the memory of every crime — witnesses,
+// reports, district heat, the identified vehicle, the last-known
+// location, the garage and the safehouse. One memory for the whole
+// session; world.reset() wipes it via resetMemory.
+const memory = createMemory(city);
+
 let parked = [];
 let traffic = null;
 let peds = null;
@@ -96,10 +106,18 @@ function buildSim() {
     onShot: () => {
       state.crimeHeat = Math.min(100, state.crimeHeat + COMBAT.heatPerShot);
       state.wanted = wantedFromHeat(state.crimeHeat);
+      // The shot is a crime the city remembers: district heat rises
+      // and any pedestrian with line of sight becomes a witness.
+      recordCrime(memory, {
+        type: 'shooting', x: player.state.x, z: player.state.z, heat: COMBAT.heatPerShot,
+      }, state, { peds: peds.peds, colliders });
     },
     onHitPerson: () => {
       state.crimeHeat = Math.min(100, state.crimeHeat + COMBAT.heatPerHit);
       state.wanted = wantedFromHeat(state.crimeHeat);
+      recordCrime(memory, {
+        type: 'shooting', x: player.state.x, z: player.state.z, heat: COMBAT.heatPerHit,
+      }, state, { peds: peds.peds, colliders });
     },
   });
 }
@@ -171,6 +189,28 @@ function refreshDerived() {
   state.playerCar = world.playerCar ? { x: world.playerCar.x, z: world.playerCar.z } : null;
   state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];
   state.flashTime = police ? police.elapsed : 0;
+  // THE CITY REMEMBERS (Day 4D): witness alerts, district heat, the
+  // last-known-location, the identified vehicle, garage/safehouse.
+  const mh = memoryHud(memory, state, state.player.x, state.player.z);
+  state.witnessAlert = mh.witnessAlert;
+  state.memoryFlash = mh.flash;
+  state.districtHeat = mh.districtHeat;
+  state.districtHeatLevel = mh.districtHeatLevel;
+  state.lastKnown = mh.lastKnown;
+  state.lastKnownStale = mh.lastKnownStale;
+  state.identifiedVehicle = mh.identifiedVehicle;
+  state.garage = { x: GARAGE.x, z: GARAGE.z };
+  state.safehouse = { x: SAFEHOUSE.x, z: SAFEHOUSE.z };
+  state.inGarage = mh.inGarage;
+  state.inSafehouse = mh.inSafehouse;
+  state.safehouseTimer = mh.safehouseTimer;
+  // Escape hints: the player only learns the garage/safehouse trick
+  // when standing in one while wanted — the hint names the payoff.
+  if (state.wanted > 0 && mh.inGarage) {
+    state.hint = 'GARAGE — stay hidden here to lose the trail';
+  } else if (state.wanted > 0 && mh.inSafehouse) {
+    state.hint = `SAFEHOUSE — stay put ${Math.max(0, 5 - Math.floor(mh.safehouseTimer))}s to clear the heat`;
+  }
 }
 
 // Mission controller, created after the world below; world.reset() and
@@ -213,7 +253,27 @@ const world = {
     if (ti >= 0) traffic.cars.splice(ti, 1);
     const pi = parked.indexOf(car);
     if (pi >= 0) parked.splice(pi, 1);
+    // THE CITY REMEMBERS: a switch to a DIFFERENT car while not
+    // directly observed breaks the vehicle ID and drops the pursuit to
+    // a search — checked BEFORE the new steal is recorded, while the
+    // memory still holds the old vehicle.
+    const prevIdentified = memory.identifiedVehicle;
+    const switchObserved = state.wanted > 0 && prevIdentified && prevIdentified.id !== car.id
+      ? isDirectlyObserved(memory, police, player.state, state, colliders)
+      : false;
     applySteal(state, car);
+    if (prevIdentified && prevIdentified.id !== car.id) {
+      onVehicleSwitch(memory, car, switchObserved, police, state);
+    }
+    // The steal is a crime the city remembers: district heat rises,
+    // the car becomes the identified vehicle, nearby pedestrians with
+    // line of sight become witnesses. Witnesses are detected BEFORE
+    // triggerFlee below, so the flee itself does not hide the crime —
+    // a witness who is still fleeing when the report is due reports
+    // nothing, but one who calmed down does.
+    recordCrime(memory, {
+      type: 'steal', x: car.x, z: car.z, heat: VEHICLE.stealHeat, vehicle: car,
+    }, state, { peds: peds.peds, colliders });
     triggerFlee(peds, car.x, car.z);
     car.owned = true;
     this.playerCar = car;
@@ -286,6 +346,7 @@ const world = {
     player.state.yaw = s.yaw; player.state.pitch = 0.2;
     this.playerCar = null;
     buildSim();
+    resetMemory(memory);
     state.money = WORLD.moneyStart;
     state.health = WORLD.healthMax;
     state.wanted = 0;
@@ -310,15 +371,22 @@ const world = {
       player.state.z = this.playerCar.z;
       player.state.yaw = this.playerCar.heading + Math.PI;
       // A hard hit while driving is a crime: building smash, or a
-      // pedestrian struck at speed (each ped counts once).
+      // pedestrian struck at speed (each ped counts once). The city
+      // remembers it: district heat + witnesses, like any other crime.
       if (this.playerCar.collisions > hardHitsBefore && Math.abs(this.playerCar.speed) > POLICE.collisionSpeed) {
         addCollisionCrime(state);
+        recordCrime(memory, {
+          type: 'collision', x: this.playerCar.x, z: this.playerCar.z, heat: POLICE.collisionHeat,
+        }, state, { peds: peds.peds, colliders });
       }
       if (Math.abs(this.playerCar.speed) > POLICE.collisionSpeed) {
         for (const ped of peds.peds) {
           if (!ped.hit && Math.hypot(ped.x - this.playerCar.x, ped.z - this.playerCar.z) < 1.8) {
             ped.hit = true;
             addCollisionCrime(state);
+            recordCrime(memory, {
+              type: 'collision', x: ped.x, z: ped.z, heat: POLICE.collisionHeat,
+            }, state, { peds: peds.peds, colliders });
             triggerFlee(peds, ped.x, ped.z);
           }
         }
@@ -328,6 +396,9 @@ const world = {
     stepTraffic(traffic, dt, obstacles);
     stepPedestrians(peds, dt);
     // Patrol runs after traffic: pursuit, search, busted, heat decay.
+    // THE CITY REMEMBERS: the patrol reads the memory — sightings
+    // refresh the last-known-location, district heat can hold wanted
+    // up, and the identified vehicle decides whether a sighting counts.
     const pc = this.playerCar;
     stepPolice(police, dt, {
       x: player.state.x, z: player.state.z,
@@ -335,7 +406,19 @@ const world = {
       vx: pc ? Math.sin(pc.heading) * pc.speed : player.state.vx,
       vz: pc ? Math.cos(pc.heading) * pc.speed : player.state.vz,
       car: pc ?? null,
-    }, state);
+    }, state, memory);
+    // Memory tick: district decay, due witness reports (which dispatch
+    // investigations), and the safehouse stay. Garage escape is a
+    // deliberate check, not a timer: driving into the garage unseen
+    // breaks the pursuit on the spot.
+    stepMemory(memory, dt, {
+      police, heatState: state,
+      player: { x: player.state.x, z: player.state.z },
+      colliders,
+    });
+    if (state.wanted > 0) {
+      tryGarageEscape(memory, police, { x: player.state.x, z: player.state.z }, state, colliders);
+    }
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
     // Combat: spawn the M3 harbor guards once Mission 3 is active,
     // then step weapons + enemy AI. Enemy hits reduce state.health
@@ -490,6 +573,7 @@ missionCtl = createMissionCtl();
 // world/mission/combat state, plus helpers to stage M3 and fire.
 window.__cabo = {
   world, state,
+  get memory() { return memory; },
   get combat() { return world.combat; },
   mission: () => missionCtl,
   fire: () => world.fireWeapon(),

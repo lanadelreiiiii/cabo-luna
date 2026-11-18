@@ -5,6 +5,7 @@
 import * as THREE from 'three';
 import { CAMERA } from './config.js';
 import { gradeFor } from './visual-grades.js';
+import { GARAGE, SAFEHOUSE } from './city-remembers.js';
 
 // Canvas facade per district kind: a warm wall tint base with a grid of
 // sunlit windows, drawn differently per kind so districts read apart
@@ -619,6 +620,43 @@ export function buildScene(city, gradeName) {
       m.compose(p, q, s); sBoards.setMatrixAt(i, m);
     });
     scene.add(posts, sBoards);
+  }
+
+  // THE CITY REMEMBERS (Day 4D): the two escapes are marked in the
+  // world, not just on the minimap — a green ground decal, four short
+  // corner posts and a glowing green lamp at the garage (Taller Brisa,
+  // Luna Vieja) and at the Colina Verde safehouse. Decals sit just
+  // above the road so cars drive over them; nothing here collides.
+  for (const site of [GARAGE, SAFEHOUSE]) {
+    const decal = new THREE.Mesh(
+      new THREE.PlaneGeometry(site.radius * 2, site.radius * 2),
+      new THREE.MeshLambertMaterial({ color: 0x2f7a3d, transparent: true, opacity: 0.25 }),
+    );
+    decal.rotation.x = -Math.PI / 2;
+    decal.position.set(site.x, 0.06, site.z);
+    decal.receiveShadow = true;
+    scene.add(decal);
+    const postGeo = new THREE.CylinderGeometry(0.14, 0.14, 2.2, 6);
+    const postMat = new THREE.MeshLambertMaterial({ color: 0x2f7a3d });
+    const posts = new THREE.InstancedMesh(postGeo, postMat, 4);
+    const r = site.radius - 1;
+    [[-r, -r], [r, -r], [-r, r], [r, r]].forEach(([ox, oz], i) => {
+      p.set(site.x + ox, 1.1, site.z + oz); s.set(1, 1, 1);
+      m.compose(p, q, s); posts.setMatrixAt(i, m);
+    });
+    scene.add(posts);
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.35, 10, 8),
+      new THREE.MeshLambertMaterial({ color: 0x57d977, emissive: 0x2f9a4d, emissiveIntensity: 1.2 }),
+    );
+    lamp.position.set(site.x, 2.6, site.z);
+    scene.add(lamp);
+    const lampPole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 2.6, 6),
+      new THREE.MeshLambertMaterial({ color: 0x3a3a40 }),
+    );
+    lampPole.position.set(site.x, 1.3, site.z);
+    scene.add(lampPole);
   }
 
   return { scene, sun, grade };

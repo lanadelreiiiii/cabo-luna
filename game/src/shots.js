@@ -4,7 +4,8 @@
 // Traffic and pedestrians run in every shot; the play shot steals a
 // parked car and drives it, the chase shot drives through traffic with
 // a low camera behind the player car. (Police re-stage is Day 2 Part B.)
-import { STEP } from './config.js';
+import { STEP, POLICE } from './config.js';
+import { chaseCameraPose } from './camera.js';
 import { ensureUnits, policeStatus } from './police.js';
 
 const START_STEPS = 300; // 5 s standing in the plaza, city behind the title
@@ -35,15 +36,18 @@ function highShotCam(world) {
   };
 }
 
-function carChaseCam(world) {
+// Chase-shot camera: one source of truth with camera.js. The pose
+// is pulled back and raised (13 m / 5 m) and looks at the player car
+// itself (2 m ahead, 0.5 m up) — the steep look-down lifts the car
+// clear of the dialogue band while the staged police stay in the
+// upper half of the frame. Tuned by projection, verified by eye.
+export function carChaseCam(world) {
   const car = world.playerCar;
   if (!car) return null;
-  const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
-  // Pulled back and raised vs the Part A cam so the lead patrol car
-  // (~18 m ahead) and the flanking unit stay inside the 62-degree FOV.
+  const pose = chaseCameraPose(car);
   return {
-    x: car.x - fx * 11, y: 4.2, z: car.z - fz * 11,
-    tx: car.x + fx * 16, ty: 1.6, tz: car.z + fz * 16,
+    x: pose.position.x, y: pose.position.y, z: pose.position.z,
+    tx: pose.target.x, ty: pose.target.y, tz: pose.target.z,
   };
 }
 
@@ -59,20 +63,17 @@ function syncStagedHud(world) {
 
 // Chase staging: put the patrol where the camera can see it. The
 // player drives east, so forward is +x and the right side is +z.
-// Lead unit ahead-left, flank unit alongside-right, third unit
-// further ahead-right — all in CHASE, all inside the frame, none
-// behind the camera (the Mission 02 failure was cops spawned 30 m
-// behind the camera). Speeds match the player's so the formation
-// holds for the still.
-function stagePoliceChase(world) {
+// Spots come from POLICE.chaseStage in config.js: lead ahead-left,
+// flank alongside-right, third further ahead-right — all in CHASE,
+// all inside the frame, none behind the camera (the Mission 02
+// failure was cops spawned 30 m behind the camera). Speeds match the
+// player's so the formation holds for the still — the A* pursuit
+// (police.js) still drives them.
+export function stagePoliceChase(world) {
   const car = world.playerCar;
   if (!car || !world.police) return;
   ensureUnits(world.police, world.state.wanted, car.x, car.z);
-  const spots = [
-    { dx: 18, dz: -3 }, // lead, ahead-left
-    { dx: 6, dz: 3.5 }, // flank, alongside-right
-    { dx: 30, dz: 3 }, // second lead, ahead-right
-  ];
+  const spots = POLICE.chaseStage;
   world.police.units.forEach((unit, i) => {
     const spot = spots[i % spots.length];
     unit.car.x = car.x + spot.dx;

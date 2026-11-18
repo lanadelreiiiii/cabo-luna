@@ -236,7 +236,13 @@ export function createPlayerMesh(scene) {
 }
 
 // Third-person follow camera: orbit yaw/pitch around the focus.
-// camOpts overrides distance/height (driving uses a longer chase cam).
+// camOpts overrides distance/height (driving uses a longer chase cam)
+// and lookHeight (driving looks at the car's lower body, not the
+// 1.4 m on-foot target, so the whole car sits higher in frame).
+// camOpts.smooth is a persistent {ready,x,y,z,tx,ty,tz} state object:
+// when present, the camera eases toward the computed pose each frame
+// instead of snapping (see smoothPose in camera.js); a fixed shotCam
+// always bypasses smoothing so staged shots are exact.
 export function updateCamera(camera, playerState, shotCam, camOpts) {
   const dist = camOpts?.distance ?? CAMERA.distance;
   const h = camOpts?.height ?? CAMERA.height;
@@ -250,7 +256,18 @@ export function updateCamera(camera, playerState, shotCam, camOpts) {
     cx = playerState.x + Math.sin(yaw) * cd;
     cy = playerState.y + h + dist * Math.sin(pitch);
     cz = playerState.z + Math.cos(yaw) * cd;
-    tx = playerState.x; ty = playerState.y + 1.4; tz = playerState.z;
+    tx = playerState.x; ty = playerState.y + (camOpts?.lookHeight ?? 1.4); tz = playerState.z;
+  }
+  const s = camOpts?.smooth;
+  if (s && !shotCam) {
+    const f = CAMERA.smoothFactor;
+    if (!s.ready) {
+      s.x = cx; s.y = cy; s.z = cz; s.tx = tx; s.ty = ty; s.tz = tz; s.ready = true;
+    } else {
+      s.x += (cx - s.x) * f; s.y += (cy - s.y) * f; s.z += (cz - s.z) * f;
+      s.tx += (tx - s.tx) * f; s.ty += (ty - s.ty) * f; s.tz += (tz - s.tz) * f;
+      cx = s.x; cy = s.y; cz = s.z; tx = s.tx; ty = s.ty; tz = s.tz;
+    }
   }
   camera.position.set(cx, cy, cz);
   camera.lookAt(tx, ty, tz);
@@ -304,18 +321,20 @@ export function createVehicleRig(scene, cars, peds) {
     group.add(body, cabin);
     let lightBar = null;
     if (isPolice) {
-      const barGeo = new THREE.BoxGeometry(0.5, 0.18, 0.4);
-      const redMat = new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0xff2020, emissiveIntensity: 2.2 });
-      const blueMat = new THREE.MeshLambertMaterial({ color: 0x1111aa, emissive: 0x2040ff, emissiveIntensity: 0.35 });
+      // Bigger, taller light bar so it reads at 768x480 from 25+ m:
+      // 0.62 m halves on a 1.4 m base, hot side much brighter than dim.
+      const barGeo = new THREE.BoxGeometry(0.62, 0.26, 0.5);
+      const redMat = new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0xff2020, emissiveIntensity: 3.2 });
+      const blueMat = new THREE.MeshLambertMaterial({ color: 0x1111aa, emissive: 0x2040ff, emissiveIntensity: 0.8 });
       const red = new THREE.Mesh(barGeo, redMat);
-      red.position.set(-0.32, 1.55, -car.length * 0.08);
+      red.position.set(-0.38, 1.62, -car.length * 0.08);
       const blue = new THREE.Mesh(barGeo, blueMat);
-      blue.position.set(0.32, 1.55, -car.length * 0.08);
+      blue.position.set(0.38, 1.62, -car.length * 0.08);
       const barBase = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 0.08, 0.5),
+        new THREE.BoxGeometry(1.4, 0.1, 0.6),
         new THREE.MeshLambertMaterial({ color: 0x14161c }),
       );
-      barBase.position.set(0, 1.46, -car.length * 0.08);
+      barBase.position.set(0, 1.48, -car.length * 0.08);
       group.add(barBase, red, blue);
       lightBar = { redMat, blueMat };
     }
@@ -362,8 +381,8 @@ export function createVehicleRig(scene, cars, peds) {
       group.rotation.set(car.pitch, car.heading, car.roll);
       group.visible = true;
       if (lightBar) {
-        lightBar.redMat.emissiveIntensity = phase === 0 ? 2.4 : 0.4;
-        lightBar.blueMat.emissiveIntensity = phase === 0 ? 0.4 : 2.4;
+        lightBar.redMat.emissiveIntensity = phase === 0 ? 3.2 : 0.8;
+        lightBar.blueMat.emissiveIntensity = phase === 0 ? 0.8 : 3.2;
       }
       seen.add(car.id);
     }

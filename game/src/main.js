@@ -16,6 +16,7 @@ import { POLICE, COMBAT } from './config.js';
 import { createCombatManager, spawnHarborGuards, fire as combatFire, stepCombat, cycleWeapon, switchWeapon, startReload, getAmmo } from './combat.js';
 import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
+import { driveCameraPose, clearanceFraction, approachAngle } from './camera.js';
 import { createHud } from './hud.js';
 import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_JUMP, ACTION_ENTER } from './input.js';
 import { stageShot } from './shots.js';
@@ -582,6 +583,13 @@ function syncEnemies() {
   }
 }
 
+// Chase-camera follow state (Day 4A): the smoothed pose updateCamera
+// eases toward, and the eased yaw that swings behind the car on
+// turns. Both reset on a staged shot so the first painted frame is
+// exactly the tuned pose, not a blend from wherever the camera was.
+let camSmooth = { ready: false, x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0 };
+let camYaw = null;
+
 function draw(screen, shotCam) {
   rig.sync(world.allCars(), peds.peds, world.elapsed);
   syncEnemies();
@@ -595,10 +603,24 @@ function draw(screen, shotCam) {
       camera.fov = targetFov;
       camera.updateProjectionMatrix();
     }
+    // Collision-aware pull-in: if a building sits between the car and
+    // the desired camera spot, bring the camera in just short of it
+    // instead of clipping through the wall. On open road the fraction
+    // is 1 and the shot is exactly the tuned drive pose.
+    const desired = driveCameraPose(car);
+    const clear = clearanceFraction(
+      { x: car.x, z: car.z },
+      { x: desired.position.x, z: desired.position.z },
+      colliders, CAMERA.minDistance,
+    );
+    // Yaw easing: the camera swings behind the car on turns instead
+    // of snapping to the new heading in one frame.
+    const targetYaw = car.heading + Math.PI;
+    camYaw = camYaw === null ? targetYaw : approachAngle(camYaw, targetYaw, CAMERA.yawStep);
     updateCamera(camera, {
       x: car.x, y: 0, z: car.z,
-      yaw: car.heading + Math.PI, pitch: CAMERA.drivePitch,
-    }, shotCam, { distance: CAMERA.driveDistance, height: CAMERA.driveHeight });
+      yaw: camYaw, pitch: CAMERA.drivePitch,
+    }, shotCam, { distance: CAMERA.driveDistance * clear, height: CAMERA.driveHeight, lookHeight: CAMERA.driveLookHeight, smooth: camSmooth });
   } else {
     if (Math.abs(camera.fov - CAMERA.fovBase) > 0.05) {
       camera.fov = CAMERA.fovBase;
@@ -615,6 +637,10 @@ function announce(message) { status.textContent = message; }
 
 function runShot(name) {
   const staged = stageShot(name, world);
+  // Snap the chase camera: the first painted frame must be the exact
+  // tuned pose, not an ease-in from a previous screen.
+  camSmooth.ready = false;
+  camYaw = null;
   let painted = 0;
   function paint() {
     draw(staged.screen, staged.shotCam);

@@ -34,9 +34,41 @@ export const CAMERA = {
   height: 3.2,
   minPitch: -0.15,
   maxPitch: 0.9,
-  driveDistance: 10.5,
-  driveHeight: 4.4,
-  drivePitch: 0.32,
+  // Driving chase cam (Day 4A): pulled well back and raised with a
+  // shallow pitch and a low look target, so the whole 4.4 m car sits
+  // inside the frame and clears the dialogue band at the bottom of
+  // the 768x480 shot, with road ahead still visible. Numbers were
+  // picked by projecting the car box to screen pixels at standstill,
+  // cruise and top speed (see game/src/camera.js) and then checked
+  // by eye in the play shot. The flatter pitch (0.12) and low look
+  // target (0.3) keep the car's bottom at ~265-269 px even at
+  // standstill, against the REAL dialogue-panel top of 259 px
+  // (measured in the screenshots).
+  driveDistance: 16,
+  driveHeight: 5.0,
+  drivePitch: 0.12,
+  driveLookHeight: 0.3,
+  // Chase-shot camera (shots.js carChaseCam): 13 m back, 5 m up,
+  // looking at the player car itself (0 m ahead, 0.3 m up). Looking
+  // ahead pushed the car down the frame; looking at the car lifts it
+  // to the same band as the drive pose (bottom ~270 px) while the
+  // staged police stay big in the upper half of the frame. Tuned by
+  // projection against the REAL dialogue-panel top (259 px, measured
+  // in the 768x480 chase shot — the panel is taller than the 283 px
+  // the first draft assumed), verified by eye.
+  chaseDistance: 13,
+  chaseHeight: 5.0,
+  chaseLookAhead: 0,
+  chaseLookHeight: 0.3,
+  // Follow feel: per-frame exponential ease toward the desired pose
+  // (0.25 = most of the way there in ~4 frames), max camera-yaw
+  // swing per frame so sharp turns swing the camera instead of
+  // snapping it, and the closest the collision pull-in may bring
+  // the camera to the car.
+  smoothFactor: 0.25,
+  yawStep: 0.12,
+  minDistance: 5.5,
+  clearanceMargin: 1.2,
   fovBase: 62,
   fovSpeedGain: 0.28,
   fovMaxExtra: 10,
@@ -140,6 +172,17 @@ export const POLICE = {
   collisionSpeed: 8, // only hits above this speed count as a crime
   interceptLead: 0.6, // seconds of player velocity to aim ahead by
   flashHz: 4, // light-bar alternation rate
+  // Chase-shot staging (shots.js stagePoliceChase): offsets from the
+  // player car, in metres — ahead is +dx (the player drives east),
+  // sideways is dz. Day 4A pulled all three units in (lead 18 -> 12,
+  // flank 6 -> 3, third 30 -> 19) so they read as police at 768x480
+  // instead of looking small and distant. Staging only sets the
+  // starting spots; the A* pursuit in police.js still drives them.
+  chaseStage: [
+    { dx: 12, dz: -3.5 }, // lead, ahead-left
+    { dx: 3, dz: 3.5 }, // flank, alongside-right
+    { dx: 19, dz: 3 }, // second lead, ahead-right
+  ],
 };
 
 // ---- Combat (Day 3B) --------------------------------------------------

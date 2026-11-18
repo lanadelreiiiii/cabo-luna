@@ -1,9 +1,15 @@
 // Cabo Luna — traffic cars and pedestrians. Both managers are plain
 // data + seeded RNG, renderer-free. Traffic follows A* routes expanded
-// to right-hand lane waypoints; pedestrians walk sidewalks, wait at
-// crosswalks, cross, and flee from nearby crime.
+// to right-hand lane waypoints; pedestrians walk the sidewalk graph
+// (sidewalk.js): corner nodes offset from the road lines, sidewalk
+// edges along each segment, crosswalk edges across intersections, and
+// named destinations. Every ped step follows a graph edge, so no ped
+// ever walks through a building; fleeing peds slide around colliders.
 import { TRAFFIC, PEDESTRIAN } from './config.js';
 import { astar, nearestNode, pathToLaneWaypoints, randomNodeId } from './roadgraph.js';
+import {
+  buildSidewalkGraph, nearestSidewalkNode, randomSidewalkNodeId,
+} from './sidewalk.js';
 import { createVehicle } from './vehicles.js';
 
 function angleDiff(target, current) {
@@ -120,121 +126,190 @@ export function stepTraffic(manager, dt, obstacles = []) {
 }
 
 // ---- Pedestrians ---------------------------------------------------
+// Pedestrians walk the sidewalk graph: spawn on a node, pick a
+// destination (a random node, or a named place — plaza, lighthouse,
+// harbour, a shop, a district landmark), A* a route, and walk it
+// node to node. The edge into the next node decides the state: a
+// 'cross' edge means WAIT_CROSS (look both ways) then CROSS.
 
-function sidewalkPoint(city, rng) {
-  const line = city.roadLines[Math.floor(rng.next() * city.roadLines.length)];
-  const horizontal = rng.next() < 0.5;
-  const along = (rng.next() * 2 - 1) * (city.half - 10);
-  const side = rng.next() < 0.5 ? -1 : 1;
-  const off = side * PEDESTRIAN.sidewalkOffset;
-  if (horizontal) return { x: along, z: line + off, line, horizontal, side };
-  return { x: line + off, z: along, line, horizontal, side };
+// 30% of trips go to a named destination, the rest to a random node.
+function newTarget(manager, ped) {
+  const { graph, rng } = manager;
+  const destIds = Object.values(graph.destinations);
+  let destId;
+  if (rng.next() < 0.3) destId = destIds[Math.floor(rng.next() * destIds.length)];
+  else destId = randomSidewalkNodeId(graph, rng);
+  const node = graph.nodes.get(destId);
+  return { x: node.x, z: node.z, destId };
 }
 
-// Half the time a pedestrian's next target is the sidewalk directly
-// across their current road, so crossings happen often enough to see.
-function newTarget(city, rng, ped) {
-  if (ped && rng.next() < 0.5) {
-    let bestLine = city.roadLines[0], bestAxis = 'z', bestD = Infinity;
-    for (const line of city.roadLines) {
-      const dz = Math.abs(ped.z - line), dx = Math.abs(ped.x - line);
-      if (dz < bestD) { bestD = dz; bestLine = line; bestAxis = 'z'; }
-      if (dx < bestD) { bestD = dx; bestLine = line; bestAxis = 'x'; }
-    }
-    const along = bestAxis === 'z'
-      ? Math.max(-city.half + 10, Math.min(city.half - 10, ped.x + rng.range(-30, 30)))
-      : Math.max(-city.half + 10, Math.min(city.half - 10, ped.z + rng.range(-30, 30)));
-    const side = bestAxis === 'z'
-      ? -Math.sign(ped.z - bestLine) || 1
-      : -Math.sign(ped.x - bestLine) || 1;
-    const off = side * PEDESTRIAN.sidewalkOffset;
-    if (bestAxis === 'z') return { x: along, z: bestLine + off, line: bestLine, horizontal: true, side };
-    return { x: bestLine + off, z: along, line: bestLine, horizontal: false, side };
-  }
-  return sidewalkPoint(city, rng);
+// Plan ped.route from the ped's current position to ped.target.
+// Returns true when the ped has a walkable route.
+function planRoute(manager, ped) {
+  const { graph } = manager;
+  const from = nearestSidewalkNode(graph, ped.x, ped.z);
+  const to = (ped.target.destId && graph.nodes.get(ped.target.destId))
+    ? graph.nodes.get(ped.target.destId)
+    : nearestSidewalkNode(graph, ped.target.x, ped.target.z);
+  const route = astar(graph, from.id, to.id);
+  if (!route || route.length < 2) return false;
+  ped.route = route;
+  ped.wpIndex = 0; // first walk to the nearest node, along the current edge
+  return true;
 }
 
 export function createPedestrianManager(city, rng) {
+  const graph = buildSidewalkGraph(city);
   const peds = [];
   const shirts = [0xd94f3d, 0x3d6fb4, 0x3d8a5a, 0xc9a13d, 0x8a5fbf, 0xe8e8e8, 0x2c4a6e];
+  const manager = { peds, city, rng, graph, colliders: graph.colliders };
   for (let i = 0; i < PEDESTRIAN.count; i++) {
-    const at = sidewalkPoint(city, rng);
+    const at = graph.nodes.get(randomSidewalkNodeId(graph, rng));
     const ped = {
       id: i,
       x: at.x, z: at.z,
       heading: rng.next() * Math.PI * 2,
       speed: PEDESTRIAN.walkMin + rng.next() * (PEDESTRIAN.walkMax - PEDESTRIAN.walkMin),
       state: 'WALK',
-      target: sidewalkPoint(city, rng),
+      target: null,
+      route: null,
+      wpIndex: 0,
       waitTimer: 0,
       fleeTimer: 0,
       fleeX: 0, fleeZ: 0,
       shirt: shirts[i % shirts.length],
       crossed: 0,
     };
+    ped.target = newTarget(manager, ped);
+    if (!planRoute(manager, ped)) { // graph is connected; never happens
+      ped.target = newTarget(manager, ped);
+      planRoute(manager, ped);
+    }
     peds.push(ped);
   }
-  return { peds, city, rng };
+  return manager;
 }
 
-// A target across the same road (opposite sidewalk) needs a crossing:
-// WAIT_CROSS (look both ways) first, then CROSS at higher speed.
-function needsCrossing(ped) {
-  const t = ped.target;
-  if (t.horizontal) {
-    return Math.abs(ped.z - t.line) < PEDESTRIAN.sidewalkOffset + 0.5
-      && Math.sign(ped.z - t.line) !== Math.sign(t.z - t.line);
+// Kind of the graph edge from node `fromId` to node `toId`.
+function edgeKind(graph, fromId, toId) {
+  const node = graph.nodes.get(fromId);
+  if (!node) return 'walk';
+  const edge = node.neighbors.find((e) => e.id === toId);
+  return edge ? edge.kind : 'walk';
+}
+
+// Fleeing runs along the sidewalk graph, not in a straight line:
+// a straight run off the sidewalk can end deep inside a block, and
+// the walk back would cut through buildings. The ped routes to a
+// node far from the crime and runs that route at flee speed.
+function planFleeRoute(manager, ped) {
+  const { graph, rng } = manager;
+  const from = nearestSidewalkNode(graph, ped.x, ped.z);
+  let bestId = from.id, bestD = -1;
+  for (let k = 0; k < 6; k++) {
+    const cand = graph.nodes.get(randomSidewalkNodeId(graph, rng));
+    const d = Math.hypot(cand.x - ped.fleeX, cand.z - ped.fleeZ);
+    if (d > bestD || (d === bestD && cand.id < bestId)) { bestD = d; bestId = cand.id; }
   }
-  return Math.abs(ped.x - t.line) < PEDESTRIAN.sidewalkOffset + 0.5
-    && Math.sign(ped.x - t.line) !== Math.sign(t.x - t.line);
+  const route = astar(graph, from.id, bestId);
+  ped.route = route && route.length >= 1 ? route : [from.id];
+  ped.wpIndex = 0; // first walk to the nearest node, along the current edge
 }
 
 export function stepPedestrians(manager, dt) {
-  const { peds, city, rng } = manager;
+  const { peds, graph, rng } = manager;
   for (const ped of peds) {
     if (ped.state === 'FLEE') {
       ped.fleeTimer -= dt;
-      const dx = ped.x - ped.fleeX, dz = ped.z - ped.fleeZ;
-      const len = Math.hypot(dx, dz) || 1;
-      ped.heading = Math.atan2(dx / len, dz / len);
-      ped.x += (dx / len) * PEDESTRIAN.fleeSpeed * dt;
-      ped.z += (dz / len) * PEDESTRIAN.fleeSpeed * dt;
-      if (ped.fleeTimer <= 0) ped.state = 'WALK';
+      // Run the flee route at flee speed; the first leg walks back to
+      // the nearest node along the current edge, so no step cuts
+      // across a block. Never wait at crosswalks while fleeing.
+      if (!ped.route || ped.wpIndex >= ped.route.length) planFleeRoute(manager, ped);
+      const nextId = ped.route[ped.wpIndex];
+      const node = graph.nodes.get(nextId);
+      if (node && Number.isFinite(node.x) && Number.isFinite(node.z)) {
+        const dx = node.x - ped.x, dz = node.z - ped.z;
+        const dist = Math.hypot(dx, dz);
+        // Land exactly on the node (see the WALK branch): turning
+        // early would cut corners into buildings.
+        if (dist <= Math.max(PEDESTRIAN.fleeSpeed * dt, 0.02)) {
+          ped.x = node.x; ped.z = node.z;
+          ped.wpIndex += 1;
+        } else {
+          ped.heading = Math.atan2(dx, dz);
+          ped.x += (dx / dist) * PEDESTRIAN.fleeSpeed * dt;
+          ped.z += (dz / dist) * PEDESTRIAN.fleeSpeed * dt;
+        }
+      }
+      if (ped.fleeTimer <= 0) { ped.state = 'WALK'; ped.route = null; }
       continue;
     }
-    const dx = ped.target.x - ped.x, dz = ped.target.z - ped.z;
+    // (Re)plan when the route is spent or was cleared — e.g. a staged
+    // target set from outside (shots.js) or the end of a flee.
+    if (!ped.route || ped.wpIndex >= ped.route.length) {
+      if (!planRoute(manager, ped)) {
+        ped.target = newTarget(manager, ped);
+        planRoute(manager, ped);
+      }
+      if (!ped.route) continue; // no route at all: wait this step
+    }
+    const nextId = ped.route[ped.wpIndex];
+    const node = graph.nodes.get(nextId);
+    if (!node || !Number.isFinite(node.x) || !Number.isFinite(node.z)) {
+      ped.route = null;
+      continue;
+    }
+    const dx = node.x - ped.x, dz = node.z - ped.z;
     const dist = Math.hypot(dx, dz);
-    if (dist < 1.2) {
-      ped.target = newTarget(city, rng, ped);
-      ped.state = 'WALK';
+    const speed = ped.state === 'CROSS' ? ped.speed * PEDESTRIAN.crossSpeedMul : ped.speed;
+    // Land exactly on the node: turning early (the old 1.2 m arrival
+    // radius) cut corners by up to 1.2 m, more than the 0.3 m the
+    // sidewalk edges clear buildings by. The landing move is at most
+    // one step's distance, so it is not a teleport.
+    if (dist <= Math.max(speed * dt, 0.02)) {
+      ped.x = node.x; ped.z = node.z;
+      if (ped.state === 'CROSS') ped.state = 'WALK';
+      ped.wpIndex += 1;
+      if (ped.wpIndex >= ped.route.length) {
+        ped.target = newTarget(manager, ped);
+        ped.route = null;
+      }
       continue;
     }
-    if (ped.state === 'WALK' && needsCrossing(ped)) {
-      ped.state = 'WAIT_CROSS';
-      ped.waitTimer = PEDESTRIAN.waitMin + rng.next() * (PEDESTRIAN.waitMax - PEDESTRIAN.waitMin);
-      continue;
+    // About to step onto a crosswalk edge: wait, look both ways.
+    // Only when standing at the edge's start node (within 1.2 m of
+    // route[wpIndex-1]) — a ped re-planning mid-edge after a flee
+    // must not freeze in the middle of the road.
+    if (ped.state === 'WALK' && ped.wpIndex > 0
+      && edgeKind(graph, ped.route[ped.wpIndex - 1], nextId) === 'cross') {
+      const from = graph.nodes.get(ped.route[ped.wpIndex - 1]);
+      if (from && Math.hypot(from.x - ped.x, from.z - ped.z) < 1.2) {
+        ped.state = 'WAIT_CROSS';
+        ped.waitTimer = PEDESTRIAN.waitMin + rng.next() * (PEDESTRIAN.waitMax - PEDESTRIAN.waitMin);
+        continue;
+      }
     }
     if (ped.state === 'WAIT_CROSS') {
       ped.waitTimer -= dt;
       if (ped.waitTimer <= 0) { ped.state = 'CROSS'; ped.crossed += 1; }
       continue;
     }
-    const speed = ped.state === 'CROSS' ? ped.speed * PEDESTRIAN.crossSpeedMul : ped.speed;
     ped.heading = Math.atan2(dx, dz);
     ped.x += (dx / dist) * speed * dt;
     ped.z += (dz / dist) * speed * dt;
-    if (ped.state === 'CROSS' && !needsCrossing(ped)) ped.state = 'WALK';
   }
   return manager;
 }
 
-// Crime nearby makes pedestrians within fleeRadius run away.
+// Crime nearby makes pedestrians within fleeRadius run away —
+// along the sidewalk graph, away from the crime (see planFleeRoute).
 export function triggerFlee(manager, x, z) {
   for (const ped of manager.peds) {
     if (Math.hypot(ped.x - x, ped.z - z) < PEDESTRIAN.fleeRadius) {
       ped.state = 'FLEE';
       ped.fleeTimer = PEDESTRIAN.fleeTime;
       ped.fleeX = x; ped.fleeZ = z;
+      planFleeRoute(manager, ped);
     }
   }
 }

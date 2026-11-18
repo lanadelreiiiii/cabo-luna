@@ -131,6 +131,7 @@ function stageStreetLife(world) {
     const [px, pz] = pedSpots[i];
     p.x = car.x + px; p.z = pz;
     p.target = { x: car.x + px + 25, z: pz, line: 110, horizontal: true, side: pz > 110 ? 1 : -1 };
+    p.route = null; // Day 4G: re-plan the sidewalk-graph route to the staged target
     p.state = 'WALK';
   }
 }

@@ -3,7 +3,7 @@
 // one shadow-casting sun. Buildings share one InstancedMesh whose facade
 // texture is painted on a canvas (lit windows, not blank boxes).
 import * as THREE from 'three';
-import { CAMERA } from './config.js';
+import { CAMERA, resolveShadow } from './config.js';
 import { gradeFor } from './visual-grades.js';
 import { GARAGE, SAFEHOUSE } from './city-remembers.js';
 
@@ -147,8 +147,10 @@ export function createRenderer(canvas) {
   return renderer;
 }
 
-export function buildScene(city, gradeName) {
+export function buildScene(city, gradeName, shadowName) {
   const grade = gradeFor(gradeName);
+  // Day 4F: shadow configuration (?shadow=A|B|C); A is the baseline.
+  const sh = resolveShadow(shadowName);
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(grade.fog.color, grade.fog.near, grade.fog.far);
 
@@ -157,10 +159,10 @@ export function buildScene(city, gradeName) {
   const sun = new THREE.DirectionalLight(grade.sun.color, grade.sun.intensity);
   sun.position.set(...grade.sun.position);
   sun.castShadow = true;
-  sun.shadow.camera.left = -200; sun.shadow.camera.right = 200;
-  sun.shadow.camera.top = 200; sun.shadow.camera.bottom = -200;
-  sun.shadow.camera.far = 700;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.camera.left = -sh.bounds; sun.shadow.camera.right = sh.bounds;
+  sun.shadow.camera.top = sh.bounds; sun.shadow.camera.bottom = -sh.bounds;
+  sun.shadow.camera.far = sh.far;
+  sun.shadow.mapSize.set(sh.mapSize, sh.mapSize);
   scene.add(sun);
   scene.add(skyDome(grade));
 
@@ -298,7 +300,7 @@ export function buildScene(city, gradeName) {
       new THREE.MeshLambertMaterial({ color: 0x9db8c4 }),
     );
     fountain.position.set(p.x, 0.55, p.z);
-    fountain.castShadow = true;
+    fountain.castShadow = sh.casters.fountain;
     scene.add(fountain);
   }
 
@@ -324,7 +326,7 @@ export function buildScene(city, gradeName) {
         inst.setMatrixAt(i, m);
         inst.setColorAt(i, col.setHex(b.color));
       });
-      inst.castShadow = true;
+      inst.castShadow = sh.casters.buildings;
       inst.receiveShadow = true;
       scene.add(inst);
     }
@@ -344,7 +346,7 @@ export function buildScene(city, gradeName) {
         capMesh.setMatrixAt(i, m);
         capMesh.setColorAt(i, col.setHex(b.roofColor));
       });
-      capMesh.castShadow = true;
+      capMesh.castShadow = sh.casters.roofCaps;
       scene.add(capMesh);
     }
     if (gables.length > 0) {
@@ -359,7 +361,7 @@ export function buildScene(city, gradeName) {
         pyr.setMatrixAt(i, m);
         pyr.setColorAt(i, col.setHex(b.roofColor));
       });
-      pyr.castShadow = true;
+      pyr.castShadow = sh.casters.roofCaps;
       scene.add(pyr);
     }
   }
@@ -370,7 +372,7 @@ export function buildScene(city, gradeName) {
     new THREE.MeshLambertMaterial({ color: 0xf2ead8 }),
   );
   tower.position.set(city.landmark.x, city.landmark.h / 2, city.landmark.z);
-  tower.castShadow = true;
+  tower.castShadow = sh.casters.lighthouse;
   scene.add(tower);
   const lampRoom = new THREE.Mesh(
     new THREE.CylinderGeometry(2.0, 2.0, 3, 16),
@@ -395,7 +397,7 @@ export function buildScene(city, gradeName) {
     p.set(t.x, t.h + 1.1, t.z); s.set(1, 1, 1);
     m.compose(p, q, s); canopies.setMatrixAt(i, m);
   });
-  trunks.castShadow = true;
+  trunks.castShadow = sh.casters.palmTrunks;
   scene.add(trunks); scene.add(canopies);
 
   // Street lamps: instanced poles + glowing heads. Staggered corners
@@ -432,7 +434,7 @@ export function buildScene(city, gradeName) {
       m.compose(p, q, s); treeCanopies.setMatrixAt(i, m);
       treeCanopies.setColorAt(i, col.setHex(t.canopy));
     });
-    treeTrunks.castShadow = true;
+    treeTrunks.castShadow = sh.casters.treeTrunks;
     scene.add(treeTrunks, treeCanopies);
   }
 
@@ -535,7 +537,7 @@ export function buildScene(city, gradeName) {
         m.compose(p, wheelRot, s); pWheels.setMatrixAt(pwi++, m);
       }
     });
-    pBodies.castShadow = true;
+    pBodies.castShadow = sh.casters.parkedBodies;
     pWheels.count = pwi;
     scene.add(pBodies, pCabins, pWheels);
   }
@@ -550,7 +552,7 @@ export function buildScene(city, gradeName) {
       p.set(t.x, t.s / 2, t.z); s.set(t.s, t.s, t.s);
       m.compose(p, q, s); crateMesh.setMatrixAt(i, m);
     });
-    crateMesh.castShadow = true;
+    crateMesh.castShadow = sh.casters.crates;
     scene.add(crateMesh);
   }
   if (city.containers.length > 0) {
@@ -564,7 +566,7 @@ export function buildScene(city, gradeName) {
       m.compose(p, rotC, s); contMesh.setMatrixAt(i, m);
       contMesh.setColorAt(i, col.setHex(t.color));
     });
-    contMesh.castShadow = true;
+    contMesh.castShadow = sh.casters.containers;
     scene.add(contMesh);
   }
   if (city.bollards.length > 0) {
@@ -664,18 +666,19 @@ export function buildScene(city, gradeName) {
 
 // Player: a simple sun-lit figure — body capsule, head, cap — so the
 // third-person camera always has something to follow.
-export function createPlayerMesh(scene) {
+export function createPlayerMesh(scene, shadowName) {
+  const sh = resolveShadow(shadowName);
   const group = new THREE.Group();
   const body = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.42, 0.85, 4, 10),
     new THREE.MeshLambertMaterial({ color: 0xd94f3d }),
   );
-  body.position.y = 1.0; body.castShadow = true;
+  body.position.y = 1.0; body.castShadow = sh.casters.playerBody;
   const head = new THREE.Mesh(
     new THREE.SphereGeometry(0.28, 12, 10),
     new THREE.MeshLambertMaterial({ color: 0xe8b98a }),
   );
-  head.position.y = 1.95; head.castShadow = true;
+  head.position.y = 1.95; head.castShadow = sh.casters.playerHead;
   const cap = new THREE.Mesh(
     new THREE.CylinderGeometry(0.3, 0.3, 0.1, 12),
     new THREE.MeshLambertMaterial({ color: 0x2c4a6e }),
@@ -745,7 +748,12 @@ const PED_BODY_GEO = new THREE.CapsuleGeometry(0.32, 0.7, 4, 8);
 const PED_HEAD_GEO = new THREE.SphereGeometry(0.22, 10, 8);
 const PED_HEAD_MAT = new THREE.MeshLambertMaterial({ color: 0xe8b98a });
 
-export function createVehicleRig(scene, cars, peds) {
+export function createVehicleRig(scene, cars, peds, shadowName) {
+  // Day 4F: per-car shadow casting follows the active config — B/C
+  // drop the cabin + roof panel, whose shadows sit inside the body
+  // shadow at 768x480 (the roof panel is 0.08 m thick on top of the
+  // cabin; the cabin's shadow is a ~1 m sliver past the body's).
+  const sh = resolveShadow(shadowName);
   // Bodies are keyed by car id and created lazily: world.reset() builds
   // fresh car objects, so sync() must match the current list, not the
   // list this rig was first built from. Wheels/lights are InstancedMesh
@@ -760,7 +768,7 @@ export function createVehicleRig(scene, cars, peds) {
     const body = new THREE.Mesh(CAR_BODY_GEO, bodyMat);
     body.scale.set(car.width, 0.62, car.length);
     body.position.y = 0.62;
-    body.castShadow = true;
+    body.castShadow = sh.casters.carBody;
     // Patrol cars read as police at a glance: black body, white cabin
     // (doors + roof), and a roof light bar. No text anywhere.
     const cabin = new THREE.Mesh(CAR_CABIN_GEO, new THREE.MeshLambertMaterial({
@@ -768,7 +776,7 @@ export function createVehicleRig(scene, cars, peds) {
     }));
     cabin.scale.set(car.width * 0.82, 0.55, car.length * 0.45);
     cabin.position.set(0, 1.18, -car.length * 0.08);
-    cabin.castShadow = true;
+    cabin.castShadow = sh.casters.carCabin;
     group.add(body, cabin);
     // Roof rework (Day 4C): the old cabin was one big dark slab on the
     // roof, and from the chase camera it read as a small "+" / crosshair
@@ -782,7 +790,7 @@ export function createVehicleRig(scene, cars, peds) {
       roofPanel = new THREE.Mesh(CAR_CABIN_GEO, bodyMat);
       roofPanel.scale.set(car.width * 0.62, 0.08, car.length * 0.22);
       roofPanel.position.set(0, 1.49, -car.length * 0.08);
-      roofPanel.castShadow = true;
+      roofPanel.castShadow = sh.casters.carRoofPanel;
       group.add(roofPanel);
       if (car.kind === 'sport') {
         spoiler = new THREE.Mesh(CAR_CABIN_GEO, bodyMat);

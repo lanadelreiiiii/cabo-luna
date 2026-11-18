@@ -5,7 +5,7 @@
 // &seed=N) stages that scene instead of running the loop, paints it twice
 // and sets window.__shotReady for a screenshot.
 import * as THREE from 'three';
-import { STEP, SEED_DEFAULT, WORLD, CAMERA, VEHICLE, VEHICLE_CONFIGS, wantedFromHeat } from './config.js';
+import { STEP, SEED_DEFAULT, WORLD, CAMERA, VEHICLE, VEHICLE_CONFIGS, wantedFromHeat, resolveShadow } from './config.js';
 import { generateCity, districtAtPoint, buildingColliders } from './city.js';
 import { makeRng } from './rng.js';
 import { buildRoadGraph } from './roadgraph.js';
@@ -50,6 +50,11 @@ const seed = Number.isInteger(seedParam) ? seedParam : SEED_DEFAULT;
 // three art-direction configurations; the default is the comparison
 // winner wired in visual-grades.js.
 const gradeParam = params.get('grade');
+// Shadow configuration (Day 4F): ?shadow=A|B|C; A is the baseline.
+// ?shadowmap=512|1024|2048 is a test-only map-size override.
+const shadowParam = params.get('shadow');
+const shadowMapParam = Number.parseInt(params.get('shadowmap') ?? '', 10);
+const shadow = resolveShadow(shadowParam, Number.isInteger(shadowMapParam) ? shadowMapParam : undefined);
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
@@ -57,10 +62,19 @@ const city = generateCity(seed);
 const colliders = buildingColliders(city);
 const graph = buildRoadGraph(city);
 const renderer = createRenderer(canvas);
-const { scene, grade } = buildScene(city, gradeParam);
+const { scene, grade } = buildScene(city, gradeParam, shadow.id);
+// Day 4F (config C): the shadow map re-renders at most every
+// updateEvery-th frame — the sun and static casters never move, so
+// only dynamic shadows lag (see config.js). The throttle flag lives
+// on renderer.shadowMap, NOT on the light: WebGLShadowMap.render
+// returns early when shadowMap.autoUpdate is false and
+// shadowMap.needsUpdate is false (vendored three.module.min.js —
+// setting sun.shadow.needsUpdate alone renders nothing). The flag is
+// set per draw in draw().
+if (shadow.updateEvery > 1) renderer.shadowMap.autoUpdate = false;
 renderer.toneMappingExposure = grade.exposure;
 const camera = new THREE.PerspectiveCamera(CAMERA.fovBase, window.innerWidth / window.innerHeight, 0.1, 2000);
-const playerMesh = createPlayerMesh(scene);
+const playerMesh = createPlayerMesh(scene, shadow.id);
 const hud = createHud(city);
 
 const saved = loadGame();
@@ -123,7 +137,7 @@ function buildSim() {
 }
 
 buildSim();
-const rig = createVehicleRig(scene, [...parked, ...traffic.cars], peds.peds);
+const rig = createVehicleRig(scene, [...parked, ...traffic.cars], peds.peds, shadow.id);
 
 const state = {
   seed,
@@ -575,6 +589,11 @@ window.__cabo = {
   world, state,
   get memory() { return memory; },
   get combat() { return world.combat; },
+  renderer,
+  shadow: () => ({
+    id: shadow.id, frame: shadowState.frame,
+    updated: shadowState.updated, updateEvery: shadow.updateEvery,
+  }),
   mission: () => missionCtl,
   fire: () => world.fireWeapon(),
   spawnGuards: () => spawnHarborGuards(world.combat),
@@ -612,12 +631,12 @@ function syncEnemies() {
       const group = new THREE.Group();
       const bodyMat = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
       const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.85, 4, 10), bodyMat);
-      body.position.y = 1.0; body.castShadow = true;
+      body.position.y = 1.0; body.castShadow = shadow.casters.enemyBody;
       const head = new THREE.Mesh(
         new THREE.SphereGeometry(0.28, 12, 10),
         new THREE.MeshLambertMaterial({ color: 0xc98a5a }),
       );
-      head.position.y = 1.95; head.castShadow = true;
+      head.position.y = 1.95; head.castShadow = shadow.casters.enemyHead;
       const vest = new THREE.Mesh(
         new THREE.BoxGeometry(0.7, 0.5, 0.5),
         new THREE.MeshLambertMaterial({ color: 0x8a2f22 }),
@@ -695,7 +714,28 @@ function syncEnemies() {
 let camSmooth = { ready: false, x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0 };
 let camYaw = null;
 
+// Day 4F (config C): per-draw frame counter for the throttled
+// shadow-map update — `updated` is true on the draws that re-render
+// the shadow map, false on the draws that reuse it.
+const shadowState = { frame: 0, updated: true };
+
 function draw(screen, shotCam) {
+  shadowState.frame += 1;
+  if (shadow.updateEvery > 1) {
+    // Update on frames 1, 4, 7, … (NOT 2, 5, 8): the shadow map must
+    // exist before the FIRST main pass ever runs. With autoUpdate off,
+    // a first frame whose main pass runs against a null shadow map
+    // poisons the renderer on this three.js build — the Lambert
+    // objects stop presenting entirely (sky only, persistent GL
+    // error 1282) and flipping autoUpdate back on does NOT recover
+    // the page (verified by probe, 18 Nov). Updating on frame 1 means
+    // every main pass samples a real map; later frames only ever
+    // reuse a valid one. In shot mode the screenshot frame (paint 2)
+    // reuses paint 1's map — nothing moves between the two paints,
+    // so the image is exact.
+    shadowState.updated = shadowState.frame % shadow.updateEvery === 1;
+    renderer.shadowMap.needsUpdate = shadowState.updated;
+  }
   rig.sync(world.allCars(), peds.peds, world.elapsed);
   syncEnemies();
   playerMesh.visible = state.onFoot;

@@ -1,20 +1,22 @@
-# Cabo Luna — Make GTA 6 (gta6-01)
+# cabo-luna
 
-An original sunset coastal open-world crime game. One bay, six districts
-(Bahia Azul, Torre Alta, Luna Vieja, Mercado Norte, Colina Verde,
-Puerto Luna), a lighthouse, palm-lined streets, and a city built
-deterministically from a single seed.
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/lanadelreiiiii/cabo-luna/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/lanadelreiiiii/cabo-luna/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-Day 0: procedural city + on-foot third-person play. Driving, traffic,
-police, and missions arrive on later days.
+Cabo Luna is an original sunset coastal open-world crime game — 5 missions, 3 weapons, police chases, helicopter pursuit, radio, and a city that remembers, built in three.js.
 
-## Run
+## Run it
 
 ```sh
 node serve.ts
 ```
 
 Open http://localhost:8080 — fully offline, no network requests.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=8tzhpmv9&utm_source=github&utm_medium=readme&utm_campaign=gta6-01) · AI agents build software for cash rewards</sub>
 
 ## Controls
 

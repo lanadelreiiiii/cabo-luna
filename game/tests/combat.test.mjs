@@ -90,16 +90,116 @@ test('reload does nothing with a full mag or an empty reserve', () => {
   assert.deepEqual([m.weapons.pistol.mag, m.weapons.pistol.reserve], [5, 0]); // partial refill
 });
 
-test('weapon switching: Q cycles, Digit select works, unknown id rejected', () => {
+test('weapon switching: Q cycles all 3, Digit select works, unknown id rejected', () => {
   const m = mgr();
   assert.equal(cycleWeapon(m), true);
   assert.equal(m.current, 'shotgun');
   assert.equal(cycleWeapon(m), true);
+  assert.equal(m.current, 'rifle');
+  assert.equal(cycleWeapon(m), true);
   assert.equal(m.current, 'pistol');
-  assert.equal(switchWeapon(m, 'shotgun'), true);
-  assert.equal(switchWeapon(m, 'shotgun'), false); // already there
-  assert.equal(switchWeapon(m, 'rifle'), false);
-  assert.equal(m.current, 'shotgun');
+  assert.equal(switchWeapon(m, 'rifle'), true);
+  assert.equal(switchWeapon(m, 'rifle'), false); // already there
+  assert.equal(switchWeapon(m, 'blaster'), false);
+  assert.equal(m.current, 'rifle');
+});
+
+test('rifle Faro-7: 5/20, 85 dmg, 1.4 s interval, 2.8 s reload, 120 m range', () => {
+  const m = mgr();
+  const r = COMBAT.weapons.rifle;
+  assert.equal(r.name, 'Faro-7');
+  assert.deepEqual([m.weapons.rifle.mag, m.weapons.rifle.reserve], [5, 20]);
+  assert.deepEqual(COMBAT.weaponOrder, ['pistol', 'shotgun', 'rifle']);
+  // Distinct from pistol (34 dmg, 12/48, 0.25 s, 60 m) and shotgun
+  // (5x12, 6/24, 0.9 s, 60 m): hardest single hit, tightest spread,
+  // slowest fire, smallest mag, longest reload, longest range.
+  assert.ok(r.damage > COMBAT.weapons.pistol.damage);
+  assert.ok(r.spread < COMBAT.weapons.pistol.spread);
+  assert.ok(r.fireInterval > COMBAT.weapons.shotgun.fireInterval);
+  assert.ok(r.magSize < COMBAT.weapons.shotgun.magSize);
+  assert.ok(r.reloadTime > COMBAT.weapons.shotgun.reloadTime);
+  assert.equal(r.range, 120);
+});
+
+test('rifle hits at 100 m where the pistol cannot reach', () => {
+  const m = mgr();
+  m.rng = { next: () => 0.5 }; // zero spread
+  const far = { x: 100, z: 0, radius: 0.6, hp: 100, kind: 'enemy' };
+  const res = fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, [far]);
+  assert.equal(res.fired, true);
+  assert.equal(res.hits.length, 0); // pistol range is 60 m
+  assert.equal(far.hp, 100);
+  switchWeapon(m, 'rifle');
+  m.cooldown = 0;
+  const res2 = fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, [far]);
+  assert.equal(res2.fired, true);
+  assert.equal(res2.hits.length, 1);
+  assert.equal(far.hp, 100 - 85);
+  assert.equal(res2.hits[0].dist < 100, true);
+  // And beyond the rifle's own 120 m it misses again.
+  const tooFar = { x: 130, z: 0, radius: 0.6, hp: 100, kind: 'enemy' };
+  m.cooldown = 0;
+  assert.equal(fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, [tooFar]).hits.length, 0);
+});
+
+test('rifle fire interval is 1.4 s and its reload takes 2.8 s', () => {
+  const m = mgr();
+  switchWeapon(m, 'rifle');
+  fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, []);
+  assert.equal(m.weapons.rifle.mag, 4);
+  assert.equal(fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, []).reason, 'cooldown');
+  stepCombat(m, 1.4, ctx());
+  assert.equal(fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, []).fired, true);
+  assert.equal(startReload(m), true);
+  stepCombat(m, 2.0, ctx());
+  assert.equal(m.reloading, true); // 2.8 s reload, only 2.0 s in
+  stepCombat(m, 0.9, ctx());
+  assert.equal(m.reloading, false);
+  assert.deepEqual([m.weapons.rifle.mag, m.weapons.rifle.reserve], [5, 18]); // 2 shots fired, 2 refilled
+});
+
+test('rifle ammo: empty mag blocks fire, reload refills, switch cancels reload', () => {
+  const m = mgr();
+  switchWeapon(m, 'rifle');
+  m.weapons.rifle.mag = 0;
+  assert.equal(fire(m, { x: 0, y: 1.5, z: 0 }, { x: 1, y: 0, z: 0 }, []).reason, 'empty');
+  assert.equal(startReload(m), true);
+  assert.equal(switchWeapon(m, 'pistol'), true); // switching cancels the reload
+  assert.equal(m.reloading, false);
+  assert.equal(m.weapons.rifle.mag, 0); // nothing refilled
+  switchWeapon(m, 'rifle');
+  assert.equal(startReload(m), true);
+  stepCombat(m, 2.9, ctx());
+  assert.deepEqual([m.weapons.rifle.mag, m.weapons.rifle.reserve], [5, 15]);
+  assert.deepEqual(getAmmo(m), {
+    weapon: 'rifle', name: 'Faro-7', mag: 5, reserve: 15,
+    magSize: 5, reloading: false, reloadProgress: 0,
+  });
+});
+
+test('two rifle hits defeat a 100 HP guard; heat callbacks fire', () => {
+  let shots = 0, personHits = 0;
+  const m = mgr({ onShot: () => { shots += 1; }, onHitPerson: () => { personHits += 1; } });
+  m.rng = { next: () => 0.5 };
+  switchWeapon(m, 'rifle');
+  const e = createEnemy('g1', 10, 0, []);
+  m.enemies.push(e);
+  const origin = { x: 0, y: 1.5, z: 0 };
+  m.cooldown = 0;
+  fire(m, origin, aimAt(origin, e), [e]);
+  assert.equal(e.hp, 15);
+  assert.notEqual(e.state, 'DEFEATED'); // one hit wounds, does not kill
+  assert.equal(e.flinchTimer > 0, true);
+  m.cooldown = 0;
+  fire(m, origin, aimAt(origin, e), [e]);
+  assert.equal(e.hp, 0);
+  assert.equal(e.state, 'DEFEATED');
+  assert.equal(m.kills, 1);
+  assert.equal(shots, 2); // +10 heat per trigger pull
+  assert.equal(personHits, 2); // +40 per hit on a person
+  assert.equal(m.hitMarkerTimer > 0, true);
+  assert.equal(m.muzzleTimer > 0, true);
+  assert.ok(m.tracers.length >= 2);
 });
 
 test('shotgun fires 5 pellets; a close target takes up to 5x damage', () => {

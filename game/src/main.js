@@ -951,7 +951,7 @@ function runGame() {
   let last = performance.now();
   let saveTimer = 0;
   // Edge detection for fire / weapon / reload keys (input.has is level).
-  let prevFire = false, prevQ = false, prevR = false, prevD1 = false, prevD2 = false;
+  let prevFire = false, prevQ = false, prevR = false, prevD1 = false, prevD2 = false, prevD3 = false;
   // Radio: gesture-only AudioContext init (once), V cycles stations.
   if (radioPlayer) {
     const initAudio = () => radioPlayer.init();
@@ -1004,7 +1004,7 @@ function runGame() {
           announce('On foot.');
         }
       }
-      // Combat keys (KeyF fire, KeyQ cycle weapon, KeyR reload, Digit1/2
+      // Combat keys (KeyF fire, KeyQ cycle weapon, KeyR reload, Digit1/2/3
       // select weapon when no mission choice is showing). KeyR also
       // retries a failed mission — the retry wins while failed.
       const hasFire = input.has('KeyF');
@@ -1023,6 +1023,9 @@ function runGame() {
         const hasD2 = input.has('Digit2');
         if (hasD2 && !prevD2) switchWeapon(combat, 'shotgun');
         prevD2 = hasD2;
+        const hasD3 = input.has('Digit3');
+        if (hasD3 && !prevD3) switchWeapon(combat, 'rifle');
+        prevD3 = hasD3;
       }
       // Radio (Phase 6): V cycles OFF -> LUNA -> BRISA -> FARO -> OFF.
       // consume() latches the press (see input.js), so a tap is never

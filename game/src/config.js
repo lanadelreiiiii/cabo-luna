@@ -186,25 +186,14 @@ export const POLICE = {
 };
 
 // ---- Shadows (Day 4F) --------------------------------------------------
-// Three shadow configurations, switchable with ?shadow=A|B|C.
-// A = the 3498cf3 baseline, unchanged. B = selective casters only:
-// car cabins / roof panels / heads / fountains stop casting — their
-// shadows sit inside (or a sliver beyond) the shadow of the body they
-// sit on, so at 768x480 the car is still grounded by its body shadow.
-// C = B's casters + a tighter shadow camera + a throttled shadow-map
-// update. The sun and the static casters never move, so the static
-// part of the map stays correct between updates; only dynamic shadows
-// (cars, peds, player) lag by at most updateEvery-1 frames (2 frames
-// = 33 ms at 60 fps, ~1 m at top speed).
+// ?shadow=A|B|C. A = 3498cf3 baseline. B = selective casters only
+// (cabins / roof panels / heads / fountains stop casting; their shadows
+// sit inside the body shadow, so cars stay grounded at 768x480).
+// C = B + tighter shadow camera + throttled map update (static part
+// stays correct; dynamic shadows lag at most updateEvery-1 frames).
 // Measured at 3498cf3 (SpectorJS, 768x480, SwiftShader — structural
-// counts only, no GPU timing): chase 142 draws / 84 shadow-pass,
-// play 127 draws / 84 shadow-pass. The shadow pass is ~59% of all
-// draws and ~82% of it is cars (each car = body + cabin + roof panel).
-// The map size moves no draw calls at all (it is fill/texture cost,
-// which Spector cannot time on this VM), so all three configs keep
-// 1024 — lowering it would risk visible softness for zero measured
-// saving. ?shadowmap=512|1024|2048 is a test-only override for that
-// investigation; it is not a fourth config.
+// counts only): chase 142 draws / 84 shadow-pass, play 127 / 84.
+// ?shadowmap=512|1024|2048 is a test-only override, not a 4th config.
 export const SHADOW_CONFIGS = {
   A: {
     id: 'A', label: 'baseline (3498cf3)',
@@ -240,14 +229,12 @@ export const SHADOW_CONFIGS = {
     },
   },
 };
-export const SHADOW_DEFAULT = 'B'; // Day 4F winner: selective casters,
-// -46 draws vs A every frame (-32% chase, -36% play), shadow pass
-// -55%, screenshots pixel-identical to A (0-5 px diff at threshold
-// 0.1). C saves more on average but only lowers the average — its
-// update frame still costs B's draws — and its dynamic shadows lag
-// up to 2 frames in live play; it stays available as ?shadow=C.
-// Unknown / missing names fall back to the default. mapSizeOverride
-// is the ?shadowmap= test hook: only 512/1024/2048 are accepted.
+export const SHADOW_DEFAULT = 'B'; // Day 4F winner: -46 draws vs A
+// every frame (-32% chase, -36% play), shadow pass -55%, screenshots
+// pixel-identical to A (0-5 px diff at 0.1). C only lowers the average
+// and its dynamic shadows lag up to 2 frames; kept as ?shadow=C.
+// Unknown names fall back to the default; ?shadowmap=512|1024|2048
+// is the test hook (only those three sizes are accepted).
 export function resolveShadow(name, mapSizeOverride) {
   const base = SHADOW_CONFIGS[name] ?? SHADOW_CONFIGS[SHADOW_DEFAULT];
   const cfg = { ...base, casters: { ...base.casters } };
@@ -255,7 +242,7 @@ export function resolveShadow(name, mapSizeOverride) {
   return cfg;
 }
 
-// Two hitscan weapons. Shooting is a crime: +10 heat per trigger pull
+// Three hitscan weapons. Shooting is a crime: +10 heat per trigger pull
 // (a 2-guard fight reliably reaches wanted 2) + 40 if a shot hits a
 // person. M3's wanted_clear needs heat from combat; police.js decay
 // clears it once the player escapes unseen.
@@ -274,8 +261,13 @@ export const COMBAT = {
       damage: 12, pellets: 5, spread: 0.09,
       fireInterval: 0.9, magSize: 6, reserveStart: 24, reloadTime: 2.2,
     },
+    rifle: {
+      id: 'rifle', name: 'Faro-7', kind: 'rifle',
+      damage: 85, pellets: 1, spread: 0.004,
+      fireInterval: 1.4, magSize: 5, reserveStart: 20, reloadTime: 2.8, range: 120,
+    },
   },
-  weaponOrder: ['pistol', 'shotgun'],
+  weaponOrder: ['pistol', 'shotgun', 'rifle'],
   enemy: {
     health: 100,
     sightRange: 38,

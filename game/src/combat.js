@@ -1,6 +1,6 @@
 // Cabo Luna — combat (Day 3B, written fresh in-session).
-// Renderer-free core: two hitscan weapons (pistol Luna-9, shotgun
-// Boca-12), magazine + reserve ammo with timed reloads, and armed NPC
+// Renderer-free core: three hitscan weapons (pistol Luna-9, shotgun
+// Boca-12, rifle Faro-7), magazine + reserve ammo with timed reloads, and armed NPC
 // enemies (harbor guards) driven by a behaviour tree re-evaluated from
 // the root every tick — the same pattern police.js uses:
 //
@@ -374,6 +374,7 @@ export function fire(manager, origin, dir, targets = []) {
   const rng = manager.rng;
   const nextRand = () => (rng ? rng.next() : Math.random());
   const hits = [];
+  const range = w.range ?? COMBAT.range;
   const dxz = Math.hypot(dir.x, dir.z) || 1;
   const baseDx = dir.x / dxz, baseDz = dir.z / dxz;
   for (let p = 0; p < w.pellets; p++) {
@@ -383,11 +384,11 @@ export function fire(manager, origin, dir, targets = []) {
     const dz = baseDx * sin + baseDz * cos;
     let best = null, bestT = Infinity;
     for (const t of targets) {
-      const hitT = rayHit(origin.x, origin.z, dx, dz, t);
+      const hitT = rayHit(origin.x, origin.z, dx, dz, t, range);
       if (hitT < bestT) { bestT = hitT; best = t; }
     }
-    const endX = origin.x + dx * (best ? bestT : COMBAT.range);
-    const endZ = origin.z + dz * (best ? bestT : COMBAT.range);
+    const endX = origin.x + dx * (best ? bestT : range);
+    const endZ = origin.z + dz * (best ? bestT : range);
     manager.tracers.push({
       from: { x: origin.x, y: origin.y ?? 1.5, z: origin.z },
       to: { x: endX, y: origin.y ?? 1.5, z: endZ },

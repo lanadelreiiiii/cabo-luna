@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Cabo Luna — Make GTA 6</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0c1a26;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #fff; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+  .screen { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; text-align: center; background: rgba(8, 20, 32, 0.45);
+    text-shadow: 0 2px 10px rgba(0,0,0,0.7); z-index: 5; padding: 16px; }
+  .screen[hidden] { display: none; }
+  .screen h1 { font-size: 56px; letter-spacing: 6px; color: #ffd98a; }
+  .screen h2 { font-size: 15px; letter-spacing: 4px; color: #9cc8e8; margin-top: 6px; font-weight: 600; }
+  .screen p { margin-top: 18px; font-size: 15px; max-width: 520px; line-height: 1.5; }
+  .screen .key { margin-top: 22px; font-size: 13px; color: #ffd98a; letter-spacing: 1px; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 4; font-size: 13px; }
+  .panel { background: rgba(8, 20, 32, 0.62); border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 8px; padding: 6px 9px; backdrop-filter: blur(2px); }
+  #hud-tl { position: absolute; top: 10px; left: 10px; max-width: 240px; }
+  #hud-mission { font-weight: 600; line-height: 1.35; }
+  #hud-wanted { margin-top: 4px; color: #ffd23d; font-size: 15px; letter-spacing: 2px; }
+  #hud-patrol { margin-top: 3px; color: #ff8a7a; font-size: 11px; white-space: nowrap; }
+  #hud-tr { position: absolute; top: 10px; right: 10px; text-align: right; }
+  #hud-money { font-size: 20px; font-weight: 800; color: #7dff9a; }
+  #hud-clock { margin-top: 2px; color: #cfe5ff; }
+  #hud-banner { position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+    font-size: 17px; font-weight: 800; letter-spacing: 2px; color: #ffd98a;
+    text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+  #hud-bl { position: absolute; left: 10px; bottom: 10px; display: flex; align-items: flex-end; gap: 8px; }
+  #hud-minimap { width: 132px; height: 132px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.7);
+    background: #12283a; }
+  #hud-loc { margin-bottom: 4px; }
+  #hud-district { font-weight: 800; font-size: 14px; }
+  #hud-street { color: #cfe5ff; font-size: 12px; }
+  #hud-bc { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); width: 190px; text-align: center; }
+  #hud-health-bar { height: 10px; border-radius: 5px; background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(255,255,255,0.35); overflow: hidden; }
+  #hud-health-fill { height: 100%; width: 100%; background: #57d977; }
+  #hud-health-text { font-size: 11px; color: #cfe5ff; margin-top: 2px; }
+  #hud-br { position: absolute; right: 10px; bottom: 10px; text-align: right; }
+  #hud-speed { font-size: 34px; font-weight: 800; line-height: 1; }
+  #hud-speed-unit { font-size: 11px; color: #cfe5ff; }
+  #hud-mode { font-size: 12px; color: #ffd98a; font-weight: 700; letter-spacing: 1px; }
+  #hud-hint { margin-top: 4px; font-size: 11px; color: #cfe5ff; }
+  @media (max-width: 768px) {
+    .screen h1 { font-size: 38px; }
+    #hud-minimap { width: 104px; height: 104px; }
+    #hud-bc { width: 150px; }
+    #hud-speed { font-size: 26px; }
+    #hud-tl { max-width: 250px; }
+  }
+</style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="status" aria-live="polite"></div>
+
+<div id="hud" hidden>
+  <div id="hud-banner">Plaza del Reloj</div>
+  <div id="hud-tl">
+    <div class="panel">
+      <div id="hud-mission">Day 0 — Explore Cabo Luna.</div>
+      <div id="hud-wanted">☆☆☆☆☆</div>
+      <div id="hud-patrol" hidden></div>
+    </div>
+  </div>
+  <div id="hud-tr">
+    <div class="panel">
+      <div id="hud-money">$250</div>
+      <div id="hud-clock">Day 1 — 09:24</div>
+    </div>
+  </div>
+  <div id="hud-bl">
+    <canvas id="hud-minimap" width="132" height="132"></canvas>
+    <div id="hud-loc">
+      <div id="hud-district">Luna Vieja</div>
+      <div id="hud-street">Paseo de las Palmas</div>
+    </div>
+  </div>
+  <div id="hud-bc">
+    <div id="hud-health-bar"><div id="hud-health-fill"></div></div>
+    <div id="hud-health-text">100</div>
+  </div>
+  <div id="hud-br">
+    <div class="panel">
+      <div><span id="hud-speed">0</span> <span id="hud-speed-unit">km/h</span></div>
+      <div id="hud-mode">ON FOOT</div>
+      <div id="hud-hint">WASD move · Shift sprint · drag look · P pause</div>
+    </div>
+  </div>
+</div>
+
+<div id="screen-title" class="screen">
+  <h1>CABO LUNA</h1>
+  <h2>A SUNSET COASTAL OPEN WORLD</h2>
+  <p>One bay, six districts, and a whole city that remembers your name.
+     Walk the streets of Luna Vieja, watch the sun drop over Bahia Azul,
+     and make your first money in Cabo Luna.</p>
+  <div class="key">PRESS ENTER TO START · WASD MOVE · SHIFT SPRINT · E ENTER CAR · DRAG TO LOOK</div>
+</div>
+<div id="screen-paused" class="screen" hidden>
+  <h1>PAUSED</h1>
+  <p>The city waits for no one — except right now.</p>
+  <div class="key">PRESS P OR ESC TO RESUME</div>
+</div>
+<div id="screen-over" class="screen" hidden>
+  <h1>BUSTED OUT</h1>
+  <p>Your run in Cabo Luna ends here. The bay will still be there tomorrow.</p>
+  <div class="key">PRESS ENTER TO TRY AGAIN</div>
+</div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

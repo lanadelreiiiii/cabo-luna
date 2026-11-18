@@ -11,6 +11,8 @@ import { makeRng } from './rng.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { createVehicle, stepVehicle, nearestEnterableCar, applySteal, resetVehicleIds } from './vehicles.js';
 import { createTrafficManager, stepTraffic, createPedestrianManager, stepPedestrians, triggerFlee } from './traffic.js';
+import { createPoliceManager, stepPolice, addCollisionCrime, policeStatus } from './police.js';
+import { POLICE } from './config.js';
 import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
 import { createHud } from './hud.js';
@@ -51,6 +53,7 @@ function buildParkedCars() {
 let parked = [];
 let traffic = null;
 let peds = null;
+let police = null;
 
 function buildSim() {
   resetVehicleIds();
@@ -58,6 +61,9 @@ function buildSim() {
   const rng = makeRng(seed * 31 + 7);
   traffic = createTrafficManager(graph, city, rng);
   peds = createPedestrianManager(city, rng);
+  // The patrol gets its own RNG stream so traffic/pedestrian builds
+  // stay byte-identical to Part A.
+  police = createPoliceManager(graph, city, colliders, makeRng(seed * 97 + 13));
 }
 
 buildSim();
@@ -101,6 +107,8 @@ function refreshDerived() {
     : 'W/S drive · A/D steer · Space brake · E exit';
   state.cars = traffic.cars.map((c) => ({ x: c.x, z: c.z }));
   state.playerCar = world.playerCar ? { x: world.playerCar.x, z: world.playerCar.z } : null;
+  state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];
+  state.flashTime = police ? police.elapsed : 0;
 }
 
 // The world object the shot stager drives: reset + fixed-step advance.
@@ -112,9 +120,12 @@ const world = {
   get parked() { return parked; },
   get traffic() { return traffic; },
   get peds() { return peds; },
+  get police() { return police; },
+  elapsed: 0,
   playerCar: null,
   allCars() {
     const list = [...parked, ...traffic.cars];
+    if (police) for (const u of police.units) list.push(u.car);
     if (this.playerCar) list.push(this.playerCar);
     return list;
   },
@@ -172,11 +183,17 @@ const world = {
     state.wanted = 0;
     state.crimeHeat = 0;
     state.onFoot = true;
+    state.police = [];
+    state.flashTime = 0;
+    this.elapsed = 0;
     state.mission = 'Day 0 — Explore Cabo Luna. Learn the streets of Luna Vieja.';
     state.clockMinutes = WORLD.clockStartMinutes;
     refreshDerived();
   },
   step(dt, move, sprint, jump, drive) {
+    this.elapsed += dt;
+    let hardHitsBefore = 0;
+    if (this.playerCar) hardHitsBefore = this.playerCar.collisions;
     if (state.onFoot) {
       player.step(dt, move, sprint, jump);
     } else if (this.playerCar) {
@@ -184,17 +201,40 @@ const world = {
       player.state.x = this.playerCar.x;
       player.state.z = this.playerCar.z;
       player.state.yaw = this.playerCar.heading + Math.PI;
+      // A hard hit while driving is a crime: building smash, or a
+      // pedestrian struck at speed (each ped counts once).
+      if (this.playerCar.collisions > hardHitsBefore && Math.abs(this.playerCar.speed) > POLICE.collisionSpeed) {
+        addCollisionCrime(state);
+      }
+      if (Math.abs(this.playerCar.speed) > POLICE.collisionSpeed) {
+        for (const ped of peds.peds) {
+          if (!ped.hit && Math.hypot(ped.x - this.playerCar.x, ped.z - this.playerCar.z) < 1.8) {
+            ped.hit = true;
+            addCollisionCrime(state);
+            triggerFlee(peds, ped.x, ped.z);
+          }
+        }
+      }
     }
     const obstacles = this.playerCar ? [{ x: this.playerCar.x, z: this.playerCar.z }] : [];
     stepTraffic(traffic, dt, obstacles);
     stepPedestrians(peds, dt);
+    // Patrol runs after traffic: pursuit, search, busted, heat decay.
+    const pc = this.playerCar;
+    stepPolice(police, dt, {
+      x: player.state.x, z: player.state.z,
+      speed: pc ? pc.speed : Math.hypot(player.state.vx, player.state.vz),
+      vx: pc ? Math.sin(pc.heading) * pc.speed : player.state.vx,
+      vz: pc ? Math.cos(pc.heading) * pc.speed : player.state.vz,
+      car: pc ?? null,
+    }, state);
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
     refreshDerived();
   },
 };
 
 function draw(screen, shotCam) {
-  rig.sync(world.allCars(), peds.peds);
+  rig.sync(world.allCars(), peds.peds, world.elapsed);
   playerMesh.visible = state.onFoot;
   playerMesh.position.set(state.player.x, state.player.y, state.player.z);
   playerMesh.rotation.y = state.player.yaw + Math.PI;
@@ -267,6 +307,7 @@ function runGame() {
         world.step(STEP, input.move(), input.sprinting(), input.consume(ACTION_JUMP),
           state.onFoot ? null : input.drive());
         if (state.health <= 0) { endGame(); break; }
+        if (world.police.busted) { endGame(); break; }
       }
       if (input.consume(ACTION_ENTER)) {
         if (state.onFoot) {

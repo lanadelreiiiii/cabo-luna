@@ -4,6 +4,7 @@
 // bottom-left circular minimap, bottom-right speed + district, bottom
 // centre health. Compact on purpose — it must not wrap at 768px wide.
 import { districtAtPoint, streetAtPoint } from './city.js';
+import { lightPhase } from './police.js';
 
 export function createHud(city) {
   const $ = (id) => document.getElementById(id);
@@ -12,7 +13,7 @@ export function createHud(city) {
     clock: $('hud-clock'), district: $('hud-district'), street: $('hud-street'),
     healthFill: $('hud-health-fill'), healthText: $('hud-health-text'),
     speed: $('hud-speed'), mode: $('hud-mode'), banner: $('hud-banner'),
-    minimap: $('hud-minimap'), hint: $('hud-hint'),
+    minimap: $('hud-minimap'), hint: $('hud-hint'), patrol: $('hud-patrol'),
   };
   const mapCtx = el.minimap.getContext('2d');
   const mapSize = el.minimap.width;
@@ -23,7 +24,7 @@ export function createHud(city) {
     return out;
   }
 
-  function drawMinimap(px, pz, yaw, trafficCars, playerCar) {
+  function drawMinimap(px, pz, yaw, trafficCars, playerCar, police, flashTime) {
     const g = mapCtx;
     const scale = mapSize / (city.size + 80);
     const toMap = (x, z) => [mapSize / 2 + (x - 0) * scale, mapSize / 2 + (z - 0) * scale];
@@ -64,6 +65,19 @@ export function createHud(city) {
         g.beginPath(); g.arc(cx, cy, 2, 0, Math.PI * 2); g.fill();
       }
     }
+    // Patrol units: blue dots with a red ring, flashing in phase with
+    // the roof light bars.
+    if (police) {
+      const phase = lightPhase(flashTime ?? 0);
+      for (const u of police) {
+        const [cx, cy] = toMap(u.x, u.z);
+        g.fillStyle = '#3d8bff';
+        g.beginPath(); g.arc(cx, cy, 3, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = phase === 0 ? '#ff2020' : '#2040ff';
+        g.lineWidth = 1.5;
+        g.beginPath(); g.arc(cx, cy, 5, 0, Math.PI * 2); g.stroke();
+      }
+    }
     // Player dot + facing wedge (on foot), or the player car (driving).
     const [pxm, pzm] = toMap(playerCar ? playerCar.x : px, playerCar ? playerCar.z : pz);
     g.fillStyle = '#ff5a3d';
@@ -97,7 +111,17 @@ export function createHud(city) {
         : 'W/S drive · A/D steer · Space brake · E exit');
       el.banner.textContent = state.banner || district;
       el.mission.textContent = state.mission;
-      drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar);
+      // Patrol response line, only while wanted: per-unit distance +
+      // status, short form so it fits one line at 768 px.
+      if (state.wanted >= 1 && state.police && state.police.length > 0) {
+        const bits = state.police.map((u) => `${u.name.replace('Unit ', '')} ${u.dist}m ${u.state}`);
+        el.patrol.textContent = `Patrol ${state.police.length} — ${bits.join(' · ')}`;
+        el.patrol.hidden = false;
+      } else {
+        el.patrol.textContent = '';
+        el.patrol.hidden = true;
+      }
+      drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar, state.police, state.flashTime);
     },
     showScreen(screen) {
       document.getElementById('screen-title').hidden = screen !== 'title';

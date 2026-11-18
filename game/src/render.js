@@ -287,26 +287,51 @@ export function createVehicleRig(scene, cars, peds) {
     let entry = bodies.get(car.id);
     if (entry) { entry.car = car; return entry; }
     const group = new THREE.Group();
+    const isPolice = car.kind === 'police';
     const bodyMat = new THREE.MeshLambertMaterial({ color: car.color });
     const body = new THREE.Mesh(CAR_BODY_GEO, bodyMat);
     body.scale.set(car.width, 0.62, car.length);
     body.position.y = 0.62;
     body.castShadow = true;
-    const cabin = new THREE.Mesh(CAR_CABIN_GEO, new THREE.MeshLambertMaterial({ color: 0x2c3e50 }));
+    // Patrol cars read as police at a glance: black body, white cabin
+    // (doors + roof), and a roof light bar. No text anywhere.
+    const cabin = new THREE.Mesh(CAR_CABIN_GEO, new THREE.MeshLambertMaterial({
+      color: isPolice ? 0xe8e8e8 : 0x2c3e50,
+    }));
     cabin.scale.set(car.width * 0.82, 0.55, car.length * 0.45);
     cabin.position.set(0, 1.18, -car.length * 0.08);
     cabin.castShadow = true;
     group.add(body, cabin);
+    let lightBar = null;
+    if (isPolice) {
+      const barGeo = new THREE.BoxGeometry(0.5, 0.18, 0.4);
+      const redMat = new THREE.MeshLambertMaterial({ color: 0xaa1111, emissive: 0xff2020, emissiveIntensity: 2.2 });
+      const blueMat = new THREE.MeshLambertMaterial({ color: 0x1111aa, emissive: 0x2040ff, emissiveIntensity: 0.35 });
+      const red = new THREE.Mesh(barGeo, redMat);
+      red.position.set(-0.32, 1.55, -car.length * 0.08);
+      const blue = new THREE.Mesh(barGeo, blueMat);
+      blue.position.set(0.32, 1.55, -car.length * 0.08);
+      const barBase = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.08, 0.5),
+        new THREE.MeshLambertMaterial({ color: 0x14161c }),
+      );
+      barBase.position.set(0, 1.46, -car.length * 0.08);
+      group.add(barBase, red, blue);
+      lightBar = { redMat, blueMat };
+    }
     scene.add(group);
-    entry = { car, group, body, cabin };
+    entry = { car, group, body, cabin, lightBar };
     bodies.set(car.id, entry);
     return entry;
   }
   for (const car of cars) bodyFor(car);
-  const wheels = new THREE.InstancedMesh(WHEEL_GEO, WHEEL_MAT, Math.max(1, cars.length * 4));
+  // Wheels/lights capacity covers the initial fleet plus the patrol
+  // units, which spawn later and are created lazily by sync().
+  const fleetCap = cars.length + 4;
+  const wheels = new THREE.InstancedMesh(WHEEL_GEO, WHEEL_MAT, Math.max(1, fleetCap * 4));
   wheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(wheels);
-  const lights = new THREE.InstancedMesh(LIGHT_GEO, LIGHT_MAT, Math.max(1, cars.length * 2));
+  const lights = new THREE.InstancedMesh(LIGHT_GEO, LIGHT_MAT, Math.max(1, fleetCap * 2));
   lights.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(lights);
 
@@ -321,10 +346,13 @@ export function createVehicleRig(scene, cars, peds) {
   const pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
   const wheelQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
 
-  function sync(carList, pedList) {
+  function sync(carList, pedList, simTime = 0) {
     const seen = new Set();
+    // Light-bar flash: alternating red/blue from sim time, so a still
+    // frame always shows one side hot and the other dimly lit.
+    const phase = Math.floor(simTime * 4) % 2;
     for (const car of carList) {
-      const { group, body, cabin } = bodyFor(car);
+      const { group, body, cabin, lightBar } = bodyFor(car);
       // Size follows the current car: ids are reused across resets and
       // a sedan may take over a sport's id.
       body.scale.set(car.width, 0.62, car.length);
@@ -333,6 +361,10 @@ export function createVehicleRig(scene, cars, peds) {
       group.position.set(car.x, 0, car.z);
       group.rotation.set(car.pitch, car.heading, car.roll);
       group.visible = true;
+      if (lightBar) {
+        lightBar.redMat.emissiveIntensity = phase === 0 ? 2.4 : 0.4;
+        lightBar.blueMat.emissiveIntensity = phase === 0 ? 0.4 : 2.4;
+      }
       seen.add(car.id);
     }
     for (const [id, { group }] of bodies) {

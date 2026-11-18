@@ -42,6 +42,10 @@ const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
 const seed = Number.isInteger(seedParam) ? seedParam : SEED_DEFAULT;
+// Visual grade (Day 4C): ?grade=sunset|golden|haze selects one of the
+// three art-direction configurations; the default is the comparison
+// winner wired in visual-grades.js.
+const gradeParam = params.get('grade');
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
@@ -49,7 +53,8 @@ const city = generateCity(seed);
 const colliders = buildingColliders(city);
 const graph = buildRoadGraph(city);
 const renderer = createRenderer(canvas);
-const { scene } = buildScene(city);
+const { scene, grade } = buildScene(city, gradeParam);
+renderer.toneMappingExposure = grade.exposure;
 const camera = new THREE.PerspectiveCamera(CAMERA.fovBase, window.innerWidth / window.innerHeight, 0.1, 2000);
 const playerMesh = createPlayerMesh(scene);
 const hud = createHud(city);

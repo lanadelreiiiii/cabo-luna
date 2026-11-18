@@ -122,7 +122,7 @@ export function wantedFromHeat(heat) {
 }
 
 export const TRAFFIC = {
-  count: 12,
+  count: 16, // Day 4C: 12 -> 16, denser streets for the driving shots
   cruiseMin: 7,
   cruiseMax: 11,
   waypointRadius: 1.5,
@@ -137,7 +137,7 @@ export const TRAFFIC = {
 };
 
 export const PEDESTRIAN = {
-  count: 15,
+  count: 22, // Day 4C: 15 -> 22, fuller sidewalks for the driving shots
   walkMin: 1.0,
   walkMax: 1.6,
   crossSpeedMul: 1.6,

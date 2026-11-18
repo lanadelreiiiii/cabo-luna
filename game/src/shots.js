@@ -105,14 +105,15 @@ function laneSteer(world, targetHeading, i) {
   return keep + Math.sin(i * 0.02) * 0.02;
 }
 // Stage a little street life ahead of the player car so the driving
-// shots actually show traffic and pedestrians: three traffic cars up
-// the same road, two pedestrians on the south sidewalk. All positions
-// are fixed offsets from the player car, so the staging is deterministic.
+// shots actually show traffic and pedestrians: four traffic cars up
+// the same road (Day 4C: 3 -> 4, closer spacing so the near car reads
+// big), three pedestrians on both sidewalks. All positions are fixed
+// offsets from the player car, so the staging is deterministic.
 function stageStreetLife(world) {
   const car = world.playerCar;
   if (!car) return;
-  const spots = [20, 38, 60];
-  for (let i = 0; i < Math.min(3, world.traffic.cars.length); i++) {
+  const spots = [18, 32, 48, 66];
+  for (let i = 0; i < Math.min(4, world.traffic.cars.length); i++) {
     const tc = world.traffic.cars[i];
     tc.x = car.x + spots[i]; tc.z = 113;
     tc.heading = Math.PI / 2;
@@ -124,11 +125,12 @@ function stageStreetLife(world) {
     tc.wpIndex = 0;
     tc.state = 'DRIVE';
   }
-  const pedSpots = [28, 48];
-  for (let i = 0; i < Math.min(2, world.peds.peds.length); i++) {
+  const pedSpots = [[26, 117.5], [44, 117.5], [58, 102.5]];
+  for (let i = 0; i < Math.min(3, world.peds.peds.length); i++) {
     const p = world.peds.peds[i];
-    p.x = car.x + pedSpots[i]; p.z = 117.5;
-    p.target = { x: car.x + pedSpots[i] + 25, z: 117.5, line: 110, horizontal: true, side: 1 };
+    const [px, pz] = pedSpots[i];
+    p.x = car.x + px; p.z = pz;
+    p.target = { x: car.x + px + 25, z: pz, line: 110, horizontal: true, side: pz > 110 ? 1 : -1 };
     p.state = 'WALK';
   }
 }

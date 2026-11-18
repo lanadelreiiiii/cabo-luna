@@ -7,6 +7,7 @@ import { STEP, POLICE } from './config.js';
 import { chaseCameraPose } from './camera.js';
 import { ensureUnits, policeStatus } from './police.js';
 import { spawnHarborGuards } from './combat.js';
+import { stageHelicopter, heliHud } from './helicopter.js';
 
 const START_STEPS = 300; // 5 s standing in the plaza, city behind the title
 const PLAY_WALK_MAX = 600; // walk to the nearest parked car, then steal it
@@ -59,6 +60,10 @@ function syncStagedHud(world) {
   world.state.police = policeStatus(world.police, p.x, p.z);
   world.state.flashTime = world.police.elapsed;
   world.state.cars = world.traffic.cars.map((c) => ({ x: c.x, z: c.z }));
+  // Phase 6: a staged helicopter is part of the frame — refresh its
+  // HUD snapshot from the staged pose (refreshDerived ran before
+  // staging and still holds the pre-stage pose).
+  if (world.heli) world.state.heli = heliHud(world.heli, p.x, p.z);
 }
 
 // Chase staging: put the patrol where the camera can see it. The
@@ -214,6 +219,12 @@ export function stageShot(name, world) {
     // before a 6 s full-throttle drive).
     stageStreetLife(world);
     stagePoliceChase(world);
+    // Phase 6: the helicopter is the hero shot's third police layer —
+    // staged ahead-left of the car, high, spotlight down on it. The
+    // live wanted here is 2 (steal = 25 heat), below the heli's live
+    // threshold of 3, so staging forces the pose (documented in
+    // helicopter.js: a pose, not a spawn).
+    if (world.heli && world.playerCar) stageHelicopter(world.heli, world.playerCar);
     syncStagedHud(world);
     return { screen: 'play', shotCam: carChaseCam(world) };
   }

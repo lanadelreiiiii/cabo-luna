@@ -5,6 +5,7 @@ export const ACTION_PAUSE = 'pause';
 export const ACTION_JUMP = 'jump';
 export const ACTION_ENTER = 'enter';
 export const ACTION_SPRINT = 'sprint';
+export const ACTION_RADIO = 'radio';
 
 const KEY_ACTIONS = {
   Enter: ACTION_CONFIRM,
@@ -12,6 +13,7 @@ const KEY_ACTIONS = {
   Escape: ACTION_PAUSE,
   KeyP: ACTION_PAUSE,
   KeyE: ACTION_ENTER,
+  KeyV: ACTION_RADIO,
 };
 
 export function createInput(canvas) {

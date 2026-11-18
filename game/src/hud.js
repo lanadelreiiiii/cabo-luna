@@ -28,6 +28,7 @@ export function createHud(city) {
     crosshair: $('hud-crosshair'), interact: $('hud-interact'),
     ammoWeapon: $('hud-ammo-weapon'), ammoCount: $('hud-ammo-count'),
     ammoReload: $('hud-ammo-reload'),
+    radio: $('hud-radio'),
   };
   const mapCtx = el.minimap.getContext('2d');
   const mapSize = el.minimap.width;
@@ -96,6 +97,15 @@ export function createHud(city) {
       g.beginPath();
       g.moveTo(kx, ky - 5); g.lineTo(kx + 5, ky); g.lineTo(kx, ky + 5); g.lineTo(kx - 5, ky);
       g.closePath(); g.fill();
+    }
+    // Phase 6: the helicopter — a yellow dot with a ring, distinct
+    // from the blue police dots, so Air-1 reads on the minimap.
+    if (extra?.heli) {
+      const [hx, hy] = toMap(extra.heli.x, extra.heli.z);
+      g.fillStyle = '#ffd23d';
+      g.beginPath(); g.arc(hx, hy, 3.5, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = '#ffd23d'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(hx, hy, 6, 0, Math.PI * 2); g.stroke();
     }
     // Traffic cars: pale dots, bumped a notch (2 -> 2.5 px) — at
     // 104 px across, the old dots were hard to pick out.
@@ -180,6 +190,8 @@ export function createHud(city) {
         else el.ammoReload.textContent = 'RELOADING…';
       }
       el.mode.textContent = state.onFoot ? 'ON FOOT' : 'DRIVING';
+      // Phase 6: radio station display (RADIO OFF until V is pressed).
+      if (el.radio) el.radio.textContent = state.radio || 'RADIO OFF';
       el.hint.textContent = state.hint || (state.onFoot
         ? 'WASD move · E enter car · F fire · Q weapon'
         : 'W/S drive · A/D steer · Space brake · E exit');
@@ -240,7 +252,10 @@ export function createHud(city) {
         const shown = units.slice(0, 3);
         const extra = units.length - shown.length;
         const bits = shown.map((u) => `${u.name}\u00A0${u.dist}m${states.length === 1 ? '' : `\u00A0${u.state[0]}`}`).join(' · ')
-          + (extra > 0 ? ` +${extra}` : '');
+          + (extra > 0 ? ` +${extra}` : '')
+          // Phase 6: Air-1 rides along on the patrol line when the
+          // helicopter is up — it is air support, not a 5th ground unit.
+          + (state.heli?.active ? ` · AIR\u00A01\u00A0${state.heli.dist}m` : '');
         el.patrol.textContent = states.length === 1
           ? `${states[0]} — ${bits}`
           : bits;
@@ -278,6 +293,7 @@ export function createHud(city) {
       drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar, state.police, state.flashTime, {
         lastKnown: state.wanted > 0 ? state.lastKnown : null,
         garage: state.garage, safehouse: state.safehouse,
+        heli: state.heli?.active ? { x: state.heli.x, z: state.heli.z } : null,
       });
     },
     showScreen(screen) {

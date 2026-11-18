@@ -23,7 +23,7 @@ import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
 import { driveCameraPose, clearanceFraction, approachAngle } from './camera.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_JUMP, ACTION_ENTER } from './input.js';
+import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_JUMP, ACTION_ENTER, ACTION_RADIO } from './input.js';
 import { stageShot } from './shots.js';
 import { saveGame, loadGame } from './save.js';
 import * as inkjs from 'inkjs';
@@ -32,6 +32,8 @@ import { CHAIN, MISSIONS, resolveManifest } from './mission-data.js';
 import { createMissionChain } from './mission-chain.js';
 import { createCaboAdapter } from './mission-adapter.js';
 import { createContextRecovery, RECOVERY_MESSAGE } from './context-recovery.js';
+import { createHelicopter, resetHelicopter, stepHelicopter, heliHud } from './helicopter.js';
+import { createRadio, cycleRadio, radioHud, createRadioPlayer } from './radio.js';
 import { MISSION_01_JSON } from './stories/mission-01-delivery-gone-wrong.js';
 import { MISSION_02_JSON } from './stories/mission-02-wrong-place.js';
 import { MISSION_03_JSON } from './stories/mission-03-harbor-silence.js';
@@ -129,6 +131,16 @@ function buildParkedCars() {
 // session; world.reset() wipes it via resetMemory.
 const memory = createMemory(city);
 
+// Phase 6 — police helicopter (air support at wanted >= 3, feeds the
+// memory last-known-location) and original procedural radio (defaults
+// OFF; the player is created only outside shot mode, so dossier
+// captures stay silent-safe — see the radioPlayer guard below).
+const heli = createHelicopter();
+const radio = createRadio();
+const radioPlayer = shot
+  ? null
+  : createRadioPlayer(radio, () => new AudioContext());
+
 let parked = [];
 let traffic = null;
 let peds = null;
@@ -214,8 +226,8 @@ function refreshDerived() {
     : player.speed() * 3.6;
   state.clockText = clockText();
   state.hint = state.onFoot
-    ? 'WASD move · E enter car · F fire · Q weapon'
-    : 'W/S drive · A/D steer · Space brake · E exit';
+    ? 'WASD move · E enter car · F fire · Q weapon · V radio'
+    : 'W/S drive · A/D steer · Space brake · E exit · V radio';
   state.combat = combat ? { ...getAmmo(combat), kills: combat.kills, hitMarker: combat.hitMarkerTimer > 0 } : null;
   // Crosshair aim state: the crosshair shows only when the player is
   // on foot AND aiming matters — an enemy is present, or a shot /
@@ -243,6 +255,10 @@ function refreshDerived() {
   state.playerCar = world.playerCar ? { x: world.playerCar.x, z: world.playerCar.z } : null;
   state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];
   state.flashTime = police ? police.elapsed : 0;
+  // Phase 6: helicopter HUD (Air-1 in the patrol line + minimap) and
+  // the radio station display (RADIO OFF until the player presses V).
+  state.heli = heli ? heliHud(heli, state.player.x, state.player.z) : { active: false, name: 'Air-1', x: 0, z: 0, dist: 0 };
+  state.radio = radioHud(radio);
   // THE CITY REMEMBERS (Day 4D): witness alerts, district heat, the
   // last-known-location, the identified vehicle, garage/safehouse.
   const mh = memoryHud(memory, state, state.player.x, state.player.z);
@@ -282,6 +298,8 @@ const world = {
   get peds() { return peds; },
   get police() { return police; },
   get combat() { return combat; },
+  get heli() { return heli; },
+  get radio() { return radio; },
   elapsed: 0,
   playerCar: null,
   allCars() {
@@ -401,6 +419,7 @@ const world = {
     this.playerCar = null;
     buildSim();
     resetMemory(memory);
+    resetHelicopter(heli);
     state.money = WORLD.moneyStart;
     state.health = WORLD.healthMax;
     state.wanted = 0;
@@ -473,6 +492,11 @@ const world = {
     if (state.wanted > 0) {
       tryGarageEscape(memory, police, { x: player.state.x, z: player.state.z }, state, colliders);
     }
+    // Phase 6: the helicopter follows the player at wanted >= 3 and
+    // its sightings refresh the memory last-known-location, so the
+    // ground search stays on the trail. Air support — it never counts
+    // toward the 4-unit ground cap (ensureUnits untouched).
+    stepHelicopter(heli, dt, { x: player.state.x, z: player.state.z }, state.wanted, memory);
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
     // Combat: spawn the M3 harbor guards once Mission 3 is active,
     // then step weapons + enemy AI. Enemy hits reduce state.health
@@ -629,6 +653,9 @@ window.__cabo = {
   world, state,
   get memory() { return memory; },
   get combat() { return world.combat; },
+  get heli() { return heli; },
+  get radio() { return radio; },
+  get radioPlayer() { return radioPlayer; },
   renderer,
   recovery,
   shadow: () => ({
@@ -760,6 +787,72 @@ let camYaw = null;
 // the shadow map, false on the draws that reuse it.
 const shadowState = { frame: 0, updated: true };
 
+// ---- Helicopter rendering (Phase 6): one group, built once —
+// dark-navy body + white stripe, tail boom, spinning main rotor,
+// and a translucent spotlight cone straight down to the ground
+// below the heli. NO light, NO shadow casting: the cone is the
+// spotlight, so the heli costs ~8 draws and zero shadow passes.
+let heliGroup = null;
+let heliRotor = null;
+let heliCone = null;
+
+function syncHelicopter() {
+  if (!heliGroup) {
+    heliGroup = new THREE.Group();
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0xe8e8e8 });
+    const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.1, 3.4), bodyMat);
+    body.position.y = 0;
+    const stripe = new THREE.Mesh(
+      new THREE.BoxGeometry(1.54, 0.35, 3.0),
+      new THREE.MeshLambertMaterial({ color: 0x1c2f4a }),
+    );
+    stripe.position.y = 0.1;
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.35, 2.8), bodyMat);
+    tail.position.set(0, 0.2, -2.9);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.0, 0.6), bodyMat);
+    fin.position.set(0, 0.6, -4.1);
+    heliRotor = new THREE.Group();
+    const bladeMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
+    const blade1 = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.06, 0.32), bladeMat);
+    const blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.06, 5.2), bladeMat);
+    heliRotor.add(blade1, blade2);
+    heliRotor.position.y = 0.85;
+    const lamp = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xfff2c0 }),
+    );
+    lamp.position.y = -0.7;
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(3.2, 26, 12, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff2c0, transparent: true, opacity: 0.15,
+        depthWrite: false, side: THREE.DoubleSide,
+      }),
+    );
+    // ConeGeometry apex is at +h/2: flip it so the apex sits at the
+    // heli and the base pools on the ground 26 m below. The cone is
+    // re-scaled per frame (see syncHelicopter) so a staged low hover
+    // still grounds its spotlight exactly on the street.
+    cone.rotation.x = Math.PI;
+    cone.position.y = -13;
+    cone.name = 'spotlight-cone';
+    heliCone = cone;
+    heliGroup.add(body, stripe, tail, fin, heliRotor, lamp, cone);
+    scene.add(heliGroup);
+  }
+  heliGroup.visible = heli.active;
+  if (!heli.active) return;
+  heliGroup.position.set(heli.x, heli.y, heli.z);
+  heliGroup.rotation.y = heli.heading;
+  heliRotor.rotation.y = heli.rotor;
+  // Spotlight cone length = hover altitude: apex at the heli, base
+  // exactly on the ground (26 m geometry scaled to heli.y).
+  if (heliCone) {
+    heliCone.scale.y = heli.y / 26;
+    heliCone.position.y = -heli.y / 2;
+  }
+}
+
 function draw(screen, shotCam) {
   // Context lost: never render into a dead GL context.
   if (recovery.paused) return;
@@ -781,6 +874,7 @@ function draw(screen, shotCam) {
   }
   rig.sync(world.allCars(), peds.peds, world.elapsed);
   syncEnemies();
+  syncHelicopter();
   playerMesh.visible = state.onFoot;
   playerMesh.position.set(state.player.x, state.player.y, state.player.z);
   playerMesh.rotation.y = state.player.yaw + Math.PI;
@@ -849,6 +943,12 @@ function runGame() {
   let saveTimer = 0;
   // Edge detection for fire / weapon / reload keys (input.has is level).
   let prevFire = false, prevQ = false, prevR = false, prevD1 = false, prevD2 = false;
+  // Radio: gesture-only AudioContext init (once), V cycles stations.
+  if (radioPlayer) {
+    const initAudio = () => radioPlayer.init();
+    window.addEventListener('click', initAudio, { once: true });
+    window.addEventListener('keydown', initAudio, { once: true });
+  }
 
   function startGame() {
     world.reset();
@@ -914,6 +1014,22 @@ function runGame() {
         const hasD2 = input.has('Digit2');
         if (hasD2 && !prevD2) switchWeapon(combat, 'shotgun');
         prevD2 = hasD2;
+      }
+      // Radio (Phase 6): V cycles OFF -> LUNA -> BRISA -> FARO -> OFF.
+      // consume() latches the press (see input.js), so a tap is never
+      // lost between slow frames — input.has() level-reads can miss a
+      // tap entirely under SwiftShader (verified: one press in four
+      // missed before this change). The player starts/stops with the
+      // station; retune re-anchors the scheduler on a mid-play change.
+      if (input.consume(ACTION_RADIO)) {
+        cycleRadio(radio);
+        if (radioPlayer) {
+          const station = radio.stationIndex >= 0;
+          if (station && !radioPlayer.getStats().playing) radioPlayer.start();
+          else if (station) radioPlayer.retune();
+          else radioPlayer.stop();
+        }
+        refreshDerived();
       }
       saveTimer += elapsed;
       if (saveTimer > 10) { saveTimer = 0; saveGame(state); }

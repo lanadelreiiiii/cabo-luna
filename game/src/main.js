@@ -30,6 +30,7 @@ import { createMissionManager } from './missions.js';
 import { CHAIN, MISSIONS, resolveManifest } from './mission-data.js';
 import { createMissionChain } from './mission-chain.js';
 import { createCaboAdapter } from './mission-adapter.js';
+import { createContextRecovery, RECOVERY_MESSAGE } from './context-recovery.js';
 import { MISSION_01_JSON } from './stories/mission-01-delivery-gone-wrong.js';
 import { MISSION_02_JSON } from './stories/mission-02-wrong-place.js';
 import { MISSION_03_JSON } from './stories/mission-03-harbor-silence.js';
@@ -74,6 +75,38 @@ const { scene, grade } = buildScene(city, gradeParam, shadow.id);
 if (shadow.updateEvery > 1) renderer.shadowMap.autoUpdate = false;
 renderer.toneMappingExposure = grade.exposure;
 const camera = new THREE.PerspectiveCamera(CAMERA.fovBase, window.innerWidth / window.innerHeight, 0.1, 2000);
+
+// ---- WebGL context recovery (Day 4H): one renderer for the whole
+// session — loss/restore NEVER creates a second one. On loss the loop
+// freezes (no sim, no render, no time advance) and the banner shows;
+// on restore we probe-render first and resume only if the probe
+// painted. three.js re-initialises its GPU programs/textures on that
+// first render after restore, so the probe is the verification. The
+// shadow-map throttle (Day 4F) restarts at frame 1 on restore so the
+// first post-restore pass samples a real shadow map, never a dropped
+// one (see the draw() note about the null-map poison).
+const recoveryEl = document.getElementById('hud-recovery');
+const recovery = createContextRecovery({
+  showMessage() {
+    recoveryEl.hidden = false;
+    announce(RECOVERY_MESSAGE);
+  },
+  hideMessage() { recoveryEl.hidden = true; },
+  verify() {
+    const gl = renderer.getContext();
+    if (!gl || gl.isContextLost()) return false;
+    if (!scene || scene.children.length === 0) return false;
+    try {
+      renderer.render(scene, camera);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  onRestored() { shadowState.frame = 0; },
+});
+canvas.addEventListener('webglcontextlost', (e) => recovery.handleLost(e));
+canvas.addEventListener('webglcontextrestored', () => recovery.handleRestored());
 const playerMesh = createPlayerMesh(scene, shadow.id);
 const hud = createHud(city);
 
@@ -590,6 +623,7 @@ window.__cabo = {
   get memory() { return memory; },
   get combat() { return world.combat; },
   renderer,
+  recovery,
   shadow: () => ({
     id: shadow.id, frame: shadowState.frame,
     updated: shadowState.updated, updateEvery: shadow.updateEvery,
@@ -720,6 +754,8 @@ let camYaw = null;
 const shadowState = { frame: 0, updated: true };
 
 function draw(screen, shotCam) {
+  // Context lost: never render into a dead GL context.
+  if (recovery.paused) return;
   shadowState.frame += 1;
   if (shadow.updateEvery > 1) {
     // Update on frames 1, 4, 7, … (NOT 2, 5, 8): the shadow map must
@@ -788,6 +824,8 @@ function runShot(name) {
   camYaw = null;
   let painted = 0;
   function paint() {
+    // Context lost mid-shot: wait for recovery, don't count a dead paint.
+    if (recovery.paused) { requestAnimationFrame(paint); return; }
     draw(staged.screen, staged.shotCam);
     painted += 1;
     if (painted < 2) requestAnimationFrame(paint);
@@ -819,6 +857,16 @@ function runGame() {
   }
 
   function frame(now) {
+    // Context lost: freeze everything — no sim steps, no renders, no
+    // time advance — but keep the rAF chain alive so resume needs no
+    // re-arm. Resetting `last` here means the post-restore frame sees
+    // ~0 elapsed instead of the whole outage (MAX_FRAME would cap it
+    // anyway, but a frozen clock must not leak into the accumulator).
+    if (recovery.paused) {
+      last = now;
+      requestAnimationFrame(frame);
+      return;
+    }
     const elapsed = Math.min(MAX_FRAME, (now - last) / 1000);
     last = now;
     if (screen === 'play') {
@@ -874,6 +922,7 @@ function runGame() {
   }
 
   window.addEventListener('resize', () => {
+    if (recovery.paused) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);

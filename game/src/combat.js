@@ -97,9 +97,16 @@ export function createEnemy(id, x, z, waypoints = [], opts = {}) {
   };
 }
 
-export function spawnHarborGuards(manager) {
-  manager.enemies = HARBOR_GUARDS.map((g, i) => createEnemy(`guard-${i + 1}`, g.x, g.z, g.waypoints));
+// Day 5A: generic guard spawn from a manifest `guards` list
+// [{x, z, waypoints}]. Any mission that declares guards gets them;
+// spawnHarborGuards is the M3 shorthand over HARBOR_GUARDS.
+export function spawnGuards(manager, points) {
+  manager.enemies = points.map((g, i) => createEnemy(`guard-${i + 1}`, g.x, g.z, g.waypoints));
   return manager.enemies;
+}
+
+export function spawnHarborGuards(manager) {
+  return spawnGuards(manager, HARBOR_GUARDS);
 }
 
 // Damage an enemy. Returns true if this hit defeated it. Flinch

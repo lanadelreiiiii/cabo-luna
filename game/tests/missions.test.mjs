@@ -288,7 +288,14 @@ test('chain complete unlocks the next mission; full run to all COMPLETED', () =>
   assert.equal(c.state('mission-03-harbor-silence'), 'AVAILABLE');
   c.start('mission-03-harbor-silence');
   const next3 = c.complete('mission-03-harbor-silence');
-  assert.equal(next3, null);
+  assert.equal(next3, 'mission-04-three-stops'); // Day 5A: chain continues
+  assert.equal(c.state('mission-04-three-stops'), 'AVAILABLE');
+  c.start('mission-04-three-stops');
+  c.complete('mission-04-three-stops');
+  assert.equal(c.state('mission-05-plant-the-proof'), 'AVAILABLE');
+  c.start('mission-05-plant-the-proof');
+  const next5 = c.complete('mission-05-plant-the-proof');
+  assert.equal(next5, null);
   assert.equal(c.current(), null);
   assert.deepEqual(c.completedIds(), [...CHAIN]);
 });
@@ -387,8 +394,8 @@ test('resolveManifest turns road indices into city coordinates', () => {
   }
 });
 
-test('chain has three missions in order', () => {
-  assert.deepEqual(CHAIN, ['mission-01-delivery-gone-wrong', 'mission-02-wrong-place', 'mission-03-harbor-silence']);
+test('chain has five missions in order', () => {
+  assert.deepEqual(CHAIN, ['mission-01-delivery-gone-wrong', 'mission-02-wrong-place', 'mission-03-harbor-silence', 'mission-04-three-stops', 'mission-05-plant-the-proof']);
   for (const id of CHAIN) assert.ok(MISSIONS[id], id);
 });
 

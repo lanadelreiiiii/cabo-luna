@@ -18,7 +18,7 @@ import {
   createMemory, resetMemory, recordCrime, stepMemory, tryGarageEscape,
   isDirectlyObserved, onVehicleSwitch, memoryHud, GARAGE, SAFEHOUSE,
 } from './city-remembers.js';
-import { createCombatManager, spawnHarborGuards, fire as combatFire, stepCombat, cycleWeapon, switchWeapon, startReload, getAmmo } from './combat.js';
+import { createCombatManager, spawnHarborGuards, spawnGuards, fire as combatFire, stepCombat, cycleWeapon, switchWeapon, startReload, getAmmo } from './combat.js';
 import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
 import { driveCameraPose, clearanceFraction, approachAngle } from './camera.js';
@@ -37,11 +37,15 @@ import { createRadio, cycleRadio, radioHud, createRadioPlayer } from './radio.js
 import { MISSION_01_JSON } from './stories/mission-01-delivery-gone-wrong.js';
 import { MISSION_02_JSON } from './stories/mission-02-wrong-place.js';
 import { MISSION_03_JSON } from './stories/mission-03-harbor-silence.js';
+import { MISSION_04_JSON } from './stories/mission-04-three-stops.js';
+import { MISSION_05_JSON } from './stories/mission-05-plant-the-proof.js';
 
 const STORY_JSON = {
   'mission-01-delivery-gone-wrong': MISSION_01_JSON,
   'mission-02-wrong-place': MISSION_02_JSON,
   'mission-03-harbor-silence': MISSION_03_JSON,
+  'mission-04-three-stops': MISSION_04_JSON,
+  'mission-05-plant-the-proof': MISSION_05_JSON,
 };
 
 const MAX_FRAME = 0.25;
@@ -193,7 +197,7 @@ const state = {
   crimeHeat: 0,
   day: saved && saved.seed === seed ? saved.day : WORLD.dayStart,
   clockMinutes: WORLD.clockStartMinutes,
-  mission: { job: 'JOB 1/3', title: 'A Delivery Gone Wrong', state: 'AVAILABLE', objective: 'Meet Yara at the Plaza del Reloj', done: 0, total: 5 },
+  mission: { job: `JOB 1/${CHAIN.length}`, title: 'A Delivery Gone Wrong', state: 'AVAILABLE', objective: 'Meet Yara at the Plaza del Reloj', done: 0, total: 5 },
   // Mission chain progress persisted via save.js (Day 3A).
   missionSave: {
     completedMissions: saved?.completedMissions ?? [],
@@ -498,12 +502,14 @@ const world = {
     // toward the 4-unit ground cap (ensureUnits untouched).
     stepHelicopter(heli, dt, { x: player.state.x, z: player.state.z }, state.wanted, memory);
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
-    // Combat: spawn the M3 harbor guards once Mission 3 is active,
-    // then step weapons + enemy AI. Enemy hits reduce state.health
-    // (the existing health bar / game-over at 0 picks it up).
-    if (missionCtl && missionCtl.manager.missionId === 'mission-03-harbor-silence'
-      && missionCtl.manager.status === 'active' && combat.enemies.length === 0) {
-      spawnHarborGuards(combat);
+    // Combat: spawn a mission's manifest guards once it is active
+    // (Day 5A: manifest-driven, replaces the hardcoded M3 check).
+    // Defeated guards stay in combat.enemies (DEFEATED), so the
+    // length check never respawns a cleared floor.
+    const guards = missionCtl?.manager.manifest?.guards;
+    if (missionCtl && missionCtl.manager.status === 'active'
+      && guards && combat.enemies.length === 0) {
+      spawnGuards(combat, guards);
     }
     stepCombat(combat, dt, {
       player: { x: player.state.x, z: player.state.z },
@@ -516,7 +522,9 @@ const world = {
   },
 };
 
-// ---- Mission chain: JOB 1/3 -> 2/3 -> 3/3, driven by the InkJS
+// ---- Mission chain: JOB 1/N -> ... -> N/N, driven by the InkJS
+// manager + the mission-chain state machine. N = CHAIN.length (Day 5A:
+// the HUD count is dynamic — no hardcoded "/3" anywhere).
 // manager + the mission-chain state machine. Chain progress is kept in
 // state.missionSave and written by saveGame on every transition and on
 // the 10s autosave timer. A saved chain restores completed missions as
@@ -548,7 +556,7 @@ function createMissionCtl() {
       const n = CHAIN.indexOf(id) + 1;
       if (manifest) {
         state.mission = {
-          job: `JOB ${n}/3`,
+          job: `JOB ${n}/${CHAIN.length}`,
           title: manifest.title,
           state: chain.state(id),
           objective: (state.mission && typeof state.mission === 'object' && state.mission.objective)
@@ -561,7 +569,8 @@ function createMissionCtl() {
         state.mission.objective = `Mission failed (${snap.failReason}) — press R to retry`;
       }
       if (chain.current() === null && !manifest) {
-        state.mission = { job: 'JOB 3/3', title: 'Harbor Silence', state: 'COMPLETED', objective: 'All jobs done — the city is yours.', done: 3, total: 3 };
+        const lastId = CHAIN[CHAIN.length - 1];
+        state.mission = { job: `JOB ${CHAIN.length}/${CHAIN.length}`, title: MISSIONS[lastId].title, state: 'COMPLETED', objective: 'All jobs done — the city is yours.', done: CHAIN.length, total: CHAIN.length };
       }
       // Dialogue: last ink line (speaker from its tags) + live choices.
       const lastLine = (snap.lines || []).filter((l) => l.text).pop();

@@ -42,6 +42,7 @@ class MissionManager {
     this.failReason = null;
     this.rewardPaid = 0;
     this._timer = 0; // per-objective timer (wait / lose_tail)
+    this._stageStart = 0; // elapsed at the current stage start (timed_reach deadline)
     this._wantedSeen = false;
     this._killBaseline = 0; // combat kills when the current stage started
     this._crimesApplied = new Set();
@@ -157,6 +158,7 @@ class MissionManager {
     if (!def) throw new Error(`setStage(): manifest has no objective '${objectiveId}' (mission ${this.missionId})`);
     this.stage = objectiveId;
     this._timer = 0;
+    this._stageStart = this.elapsed; // timed_reach deadline is measured from here
     this._killBaseline = typeof this.adapter.getCombatKills === 'function'
       ? this.adapter.getCombatKills() : 0;
     if (typeof this.adapter.setObjectiveText === 'function' && def.hud) {
@@ -201,6 +203,12 @@ class MissionManager {
     }
     const def = this.manifest.objectives.find((o) => o.id === this.stage);
     if (!def) return this.snapshot();
+    // Day 5A: a timed_reach stage fails the mission when its per-stage
+    // clock runs out — the global timeout is not the only clock.
+    if (def.kind === 'timed_reach' && typeof def.seconds === 'number'
+      && this.elapsed - (this._stageStart ?? this.elapsed) > def.seconds) {
+      return this.fail('too_slow');
+    }
     if (this.checkObjective(def, dt)) return this.onObjectiveMet(def);
     return this.snapshot();
   }
@@ -209,6 +217,7 @@ class MissionManager {
     const player = this.adapter.getPlayer();
     switch (def.kind) {
       case 'reach':
+      case 'timed_reach': // reach, with the per-stage deadline enforced in update()
         return Math.hypot(player.x - def.x, player.z - def.z) <= (def.radius ?? 10);
       case 'in_vehicle':
         return player.onFoot === false;

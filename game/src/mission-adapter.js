@@ -6,7 +6,7 @@
 import { wantedFromHeat } from './config.js';
 
 // Crime heat table (same values as the police module's crime model).
-export const CRIME_HEAT = { theft: 25, speeding: 10, shooting: 40 };
+export const CRIME_HEAT = { theft: 25, speeding: 10, shooting: 40, sabotage: 25 };
 
 export function createCaboAdapter(world, onObjectiveText) {
   const state = world.state;

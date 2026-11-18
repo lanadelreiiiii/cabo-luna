@@ -17,6 +17,9 @@ export function createHud(city) {
     dialogue: $('hud-dialogue'), speaker: $('hud-dialogue-speaker'),
     dialogueText: $('hud-dialogue-text'),
     choice0: $('hud-choice-0'), choice1: $('hud-choice-1'),
+    crosshair: $('hud-crosshair'),
+    ammoWeapon: $('hud-ammo-weapon'), ammoCount: $('hud-ammo-count'),
+    ammoReload: $('hud-ammo-reload'),
   };
   const mapCtx = el.minimap.getContext('2d');
   const mapSize = el.minimap.width;
@@ -114,6 +117,16 @@ export function createHud(city) {
       el.healthFill.style.width = `${Math.max(0, state.health)}%`;
       el.healthText.textContent = `${Math.round(state.health)}`;
       el.speed.textContent = `${Math.round(state.speedKmh)}`;
+      // Combat HUD: crosshair (red X briefly on a hit) + ammo counter.
+      const c = state.combat;
+      if (c) {
+        el.crosshair.classList.toggle('hit', !!c.hitMarker);
+        el.ammoWeapon.textContent = c.name.toUpperCase();
+        el.ammoCount.innerHTML = `${c.mag} <span class="reserve">/ ${c.reserve}</span>`;
+        el.ammoReload.hidden = !c.reloading;
+        if (c.mag === 0 && !c.reloading) el.ammoReload.textContent = 'EMPTY — press R';
+        else el.ammoReload.textContent = 'RELOADING…';
+      }
       el.mode.textContent = state.onFoot ? 'ON FOOT' : 'DRIVING';
       el.hint.textContent = state.hint || (state.onFoot
         ? 'WASD move · Shift sprint · E enter car · P pause'

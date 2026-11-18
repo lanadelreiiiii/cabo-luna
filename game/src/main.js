@@ -12,7 +12,8 @@ import { buildRoadGraph } from './roadgraph.js';
 import { createVehicle, stepVehicle, nearestEnterableCar, applySteal, resetVehicleIds } from './vehicles.js';
 import { createTrafficManager, stepTraffic, createPedestrianManager, stepPedestrians, triggerFlee } from './traffic.js';
 import { createPoliceManager, stepPolice, addCollisionCrime, policeStatus } from './police.js';
-import { POLICE } from './config.js';
+import { POLICE, COMBAT } from './config.js';
+import { createCombatManager, spawnHarborGuards, fire as combatFire, stepCombat, cycleWeapon, switchWeapon, startReload, getAmmo } from './combat.js';
 import { createPlayer, plazaSpawn } from './player.js';
 import { createRenderer, buildScene, createPlayerMesh, createVehicleRig, updateCamera } from './render.js';
 import { createHud } from './hud.js';
@@ -68,6 +69,7 @@ let parked = [];
 let traffic = null;
 let peds = null;
 let police = null;
+let combat = null;
 
 function buildSim() {
   resetVehicleIds();
@@ -78,6 +80,22 @@ function buildSim() {
   // The patrol gets its own RNG stream so traffic/pedestrian builds
   // stay byte-identical to Part A.
   police = createPoliceManager(graph, city, colliders, makeRng(seed * 97 + 13));
+  // Combat gets its own stream too. Shooting heat flows through the
+  // mission adapter's crime table: +10 per trigger pull, +40 per hit
+  // on a person — so a harbor fight raises wanted and the existing
+  // police pursuit + heat decay handle the rest (incl. M3 wanted_clear).
+  combat = createCombatManager({
+    rng: makeRng(seed * 131 + 3),
+    colliders,
+    onShot: () => {
+      state.crimeHeat = Math.min(100, state.crimeHeat + COMBAT.heatPerShot);
+      state.wanted = wantedFromHeat(state.crimeHeat);
+    },
+    onHitPerson: () => {
+      state.crimeHeat = Math.min(100, state.crimeHeat + COMBAT.heatPerHit);
+      state.wanted = wantedFromHeat(state.crimeHeat);
+    },
+  });
 }
 
 buildSim();
@@ -124,8 +142,9 @@ function refreshDerived() {
     : player.speed() * 3.6;
   state.clockText = clockText();
   state.hint = state.onFoot
-    ? 'WASD move · Shift sprint · E enter car · P pause'
-    : 'W/S drive · A/D steer · Space brake · E exit';
+    ? 'WASD move · Shift sprint · E enter car · F fire · Q weapon · R reload · P pause'
+    : 'W/S drive · A/D steer · Space brake · E exit · F drive-by · Q weapon · R reload';
+  state.combat = combat ? { ...getAmmo(combat), kills: combat.kills, hitMarker: combat.hitMarkerTimer > 0 } : null;
   state.cars = traffic.cars.map((c) => ({ x: c.x, z: c.z }));
   state.playerCar = world.playerCar ? { x: world.playerCar.x, z: world.playerCar.z } : null;
   state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];
@@ -146,6 +165,7 @@ const world = {
   get traffic() { return traffic; },
   get peds() { return peds; },
   get police() { return police; },
+  get combat() { return combat; },
   elapsed: 0,
   playerCar: null,
   allCars() {
@@ -194,6 +214,48 @@ const world = {
     state.onFoot = true;
     refreshDerived();
     return true;
+  },
+  // ---- Combat: hitscan fire from the player (on foot) or the car
+  // (drive-by). Aim is the camera forward / crosshair centre: the
+  // player yaw + pitch. Targets are enemies, peds and cars; hitting a
+  // ped/car is a crime (heat via the combat callbacks) and makes peds
+  // flee. Returns the fire() result.
+  fireWeapon() {
+    const p = player.state;
+    const car = this.playerCar;
+    const origin = car
+      ? { x: car.x, y: 1.4, z: car.z }
+      : { x: p.x, y: p.y + 1.5, z: p.z };
+    const yaw = car ? car.heading + Math.PI : p.yaw;
+    const pitch = car ? 0 : p.pitch;
+    const dir = {
+      x: -Math.sin(yaw) * Math.cos(pitch),
+      y: -Math.sin(pitch),
+      z: -Math.cos(yaw) * Math.cos(pitch),
+    };
+    const targets = [];
+    for (const e of combat.enemies) targets.push(e);
+    for (const ped of peds.peds) {
+      targets.push({ x: ped.x, z: ped.z, radius: 0.5, kind: 'ped', ref: ped });
+    }
+    for (const c of this.allCars()) {
+      targets.push({ x: c.x, z: c.z, radius: 1.3, kind: 'car', ref: c, hp: c.hp ?? 100 });
+    }
+    const res = combatFire(combat, origin, dir, targets);
+    if (res.fired) {
+      for (const h of res.hits) {
+        if (h.target.kind === 'ped') triggerFlee(peds, h.target.x, h.target.z);
+        if (h.target.kind === 'car') {
+          h.target.ref.hp = (h.target.ref.hp ?? 100) - h.damage;
+        }
+      }
+      refreshDerived();
+    } else if (res.reason === 'empty') {
+      // Empty mag: start the reload instead of doing nothing.
+      startReload(combat);
+      refreshDerived();
+    }
+    return res;
   },
   reset() {
     const s = plazaSpawn(city);
@@ -253,6 +315,18 @@ const world = {
       car: pc ?? null,
     }, state);
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
+    // Combat: spawn the M3 harbor guards once Mission 3 is active,
+    // then step weapons + enemy AI. Enemy hits reduce state.health
+    // (the existing health bar / game-over at 0 picks it up).
+    if (missionCtl && missionCtl.manager.missionId === 'mission-03-harbor-silence'
+      && missionCtl.manager.status === 'active' && combat.enemies.length === 0) {
+      spawnHarborGuards(combat);
+    }
+    stepCombat(combat, dt, {
+      player: { x: player.state.x, z: player.state.z },
+      colliders,
+      damagePlayer: (dmg) => { state.health = Math.max(0, state.health - dmg); },
+    });
     // Mission manager ticks last: police state (busted / chase) is fresh.
     if (missionCtl) missionCtl.tick(dt);
     refreshDerived();
@@ -390,6 +464,20 @@ function createMissionCtl() {
 }
 
 missionCtl = createMissionCtl();
+// Debug handle for headless verification (not a gameplay feature):
+// world/mission/combat state, plus helpers to stage M3 and fire.
+window.__cabo = {
+  world, state,
+  get combat() { return world.combat; },
+  mission: () => missionCtl,
+  fire: () => world.fireWeapon(),
+  spawnGuards: () => spawnHarborGuards(world.combat),
+  startMission: (id) => {
+    const chain = missionCtl.chain;
+    if (id && chain.state(id) === 'AVAILABLE') chain.start(id);
+    return missionCtl.loadCurrent();
+  },
+};
 // The shot stager (and HUD buttons / number keys) choose through these.
 world.chooseMission = (i) => missionCtl.choose(i);
 world.hasMissionChoices = () => missionCtl.hasChoices();
@@ -401,8 +489,102 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR' && missionCtl.manager.status === 'failed') missionCtl.retry();
 });
 
+// ---- Combat rendering (Day 3B): enemy meshes, tracer lines, muzzle
+// flash. All state comes from the renderer-free combat module; this
+// only paints it. Defeated enemies lie flat on the ground.
+const enemyMeshes = new Map();
+const tracerLines = [];
+let muzzleSprite = null;
+
+function syncEnemies() {
+  if (!combat) return;
+  const seen = new Set();
+  for (const e of combat.enemies) {
+    seen.add(e.id);
+    let entry = enemyMeshes.get(e.id);
+    if (!entry) {
+      const group = new THREE.Group();
+      const bodyMat = new THREE.MeshLambertMaterial({ color: 0x3a3f46 });
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 0.85, 4, 10), bodyMat);
+      body.position.y = 1.0; body.castShadow = true;
+      const head = new THREE.Mesh(
+        new THREE.SphereGeometry(0.28, 12, 10),
+        new THREE.MeshLambertMaterial({ color: 0xc98a5a }),
+      );
+      head.position.y = 1.95; head.castShadow = true;
+      const vest = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.5, 0.5),
+        new THREE.MeshLambertMaterial({ color: 0x8a2f22 }),
+      );
+      vest.position.y = 1.15;
+      group.add(body, head, vest);
+      scene.add(group);
+      entry = { group, bodyMat };
+      enemyMeshes.set(e.id, entry);
+    }
+    entry.group.position.set(e.x, 0, e.z);
+    if (e.state === 'DEFEATED') {
+      entry.group.rotation.set(Math.PI / 2, 0, e.heading);
+      entry.group.position.y = 0.3;
+    } else {
+      entry.group.rotation.set(0, e.heading + Math.PI, 0);
+      entry.group.position.y = 0;
+    }
+    // Hit flash: white-hot for a moment after taking damage.
+    entry.bodyMat.color.setHex(e.flashTimer > 0 ? 0xffffff : 0x3a3f46);
+    entry.group.visible = true;
+  }
+  for (const [id, entry] of enemyMeshes) {
+    if (!seen.has(id)) entry.group.visible = false;
+  }
+  // Tracers: one THREE.Line per live tracer, fading with its life.
+  const live = combat.tracers;
+  while (tracerLines.length < live.length) {
+    const geo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(), new THREE.Vector3(),
+    ]);
+    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+      color: 0xffe9a0, transparent: true, opacity: 0.9,
+    }));
+    line.frustumCulled = false;
+    scene.add(line);
+    tracerLines.push(line);
+  }
+  live.forEach((t, i) => {
+    const line = tracerLines[i];
+    line.visible = true;
+    line.material.opacity = Math.max(0, (t.life / t.max)) * 0.9;
+    const pos = line.geometry.attributes.position;
+    pos.setXYZ(0, t.from.x, t.from.y, t.from.z);
+    pos.setXYZ(1, t.to.x, t.to.y, t.to.z);
+    pos.needsUpdate = true;
+  });
+  for (let i = live.length; i < tracerLines.length; i++) tracerLines[i].visible = false;
+  // Muzzle flash: a small bright sprite at the player's gun for 60 ms.
+  if (!muzzleSprite) {
+    muzzleSprite = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a0 }),
+    );
+    scene.add(muzzleSprite);
+  }
+  if (combat.muzzleTimer > 0) {
+    const p = player.state;
+    const car = world.playerCar;
+    const yaw = car ? car.heading + Math.PI : p.yaw;
+    const ox = car ? car.x : p.x, oz = car ? car.z : p.z;
+    muzzleSprite.position.set(
+      ox - Math.sin(yaw) * 0.9, (car ? 1.4 : p.y + 1.5), oz - Math.cos(yaw) * 0.9,
+    );
+    muzzleSprite.visible = true;
+  } else {
+    muzzleSprite.visible = false;
+  }
+}
+
 function draw(screen, shotCam) {
   rig.sync(world.allCars(), peds.peds, world.elapsed);
+  syncEnemies();
   playerMesh.visible = state.onFoot;
   playerMesh.position.set(state.player.x, state.player.y, state.player.z);
   playerMesh.rotation.y = state.player.yaw + Math.PI;
@@ -449,6 +631,8 @@ function runGame() {
   let accumulator = 0;
   let last = performance.now();
   let saveTimer = 0;
+  // Edge detection for fire / weapon / reload keys (input.has is level).
+  let prevFire = false, prevQ = false, prevR = false, prevD1 = false, prevD2 = false;
 
   function startGame() {
     world.reset();
@@ -484,6 +668,26 @@ function runGame() {
           world.exitCar();
           announce('On foot.');
         }
+      }
+      // Combat keys (KeyF fire, KeyQ cycle weapon, KeyR reload, Digit1/2
+      // select weapon when no mission choice is showing). KeyR also
+      // retries a failed mission — the retry wins while failed.
+      const hasFire = input.has('KeyF');
+      if (hasFire && !prevFire) world.fireWeapon();
+      prevFire = hasFire;
+      const hasQ = input.has('KeyQ');
+      if (hasQ && !prevQ) cycleWeapon(combat);
+      prevQ = hasQ;
+      const hasR = input.has('KeyR');
+      if (hasR && !prevR && missionCtl.manager.status !== 'failed') startReload(combat);
+      prevR = hasR;
+      if (!missionCtl.hasChoices()) {
+        const hasD1 = input.has('Digit1');
+        if (hasD1 && !prevD1) switchWeapon(combat, 'pistol');
+        prevD1 = hasD1;
+        const hasD2 = input.has('Digit2');
+        if (hasD2 && !prevD2) switchWeapon(combat, 'shotgun');
+        prevD2 = hasD2;
       }
       saveTimer += elapsed;
       if (saveTimer > 10) { saveTimer = 0; saveGame(state); }

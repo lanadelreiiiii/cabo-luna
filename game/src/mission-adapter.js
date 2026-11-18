@@ -36,10 +36,10 @@ export function createCaboAdapter(world, onObjectiveText) {
     isBeingChased() {
       return !!world.police?.units?.some((u) => u.state === 'CHASE');
     },
-    // DAY 3B SEAM: combat kill counter. The combat system will
-    // increment it when an enemy is defeated; until then it is always 0,
-    // so `defeat` objectives cannot complete in Day 3A (by design).
-    getCombatKills() { return 0; },
+    // Day 3B: the combat system increments world.combat.kills when an
+    // enemy is defeated; the mission manager counts kills since the
+    // current `defeat` stage started, so M3 completes after 2 guards.
+    getCombatKills() { return world.combat?.kills ?? 0; },
     setObjectiveText(text) {
       if (typeof onObjectiveText === 'function') onObjectiveText(text);
     },

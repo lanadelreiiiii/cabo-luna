@@ -142,3 +142,45 @@ export const POLICE = {
   flashHz: 4, // light-bar alternation rate
 };
 
+// ---- Combat (Day 3B) --------------------------------------------------
+// Two hitscan weapons. Shooting is a crime: +10 heat per trigger pull
+// (a 2-guard fight reliably reaches wanted 2) + 40 if a shot hits a
+// person. M3's wanted_clear needs heat from combat; police.js decay
+// clears it once the player escapes unseen.
+export const COMBAT = {
+  range: 60,
+  heatPerShot: 10,
+  heatPerHit: 40,
+  weapons: {
+    pistol: {
+      id: 'pistol', name: 'Luna-9', kind: 'pistol',
+      damage: 34, pellets: 1, spread: 0.02,
+      fireInterval: 0.25, magSize: 12, reserveStart: 48, reloadTime: 1.2,
+    },
+    shotgun: {
+      id: 'shotgun', name: 'Boca-12', kind: 'shotgun',
+      damage: 12, pellets: 5, spread: 0.09,
+      fireInterval: 0.9, magSize: 6, reserveStart: 24, reloadTime: 2.2,
+    },
+  },
+  weaponOrder: ['pistol', 'shotgun'],
+  enemy: {
+    health: 100,
+    sightRange: 38,
+    engageRange: 38,
+    hearRadius: 45,
+    patrolSpeed: 1.6,
+    investigateSpeed: 3.2,
+    combatSpeed: 2.6,
+    retreatSpeed: 4.5,
+    coverHp: 40,
+    retreatHp: 20,
+    shootInterval: 0.9,
+    damagePerHit: 8,
+    hitChanceBase: 0.35,
+    hitChanceFalloff: 0.006,
+    hitChanceMin: 0.05,
+    flinchTime: 0.25,
+  },
+};
+

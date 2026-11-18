@@ -3,7 +3,7 @@
 // end-to-end. Run: node --test game/tests/combat.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Story, Compiler } from '../../../../custom-skills/ink-mission-system/node_modules/inkjs/dist/ink-full.mjs';
+import { Story, Compiler } from '../vendor/ink-full.mjs';
 import { COMBAT, STEP } from '../src/config.js';
 import { makeRng } from '../src/rng.js';
 import { generateCity } from '../src/city.js';

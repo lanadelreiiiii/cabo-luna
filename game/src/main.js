@@ -5,7 +5,7 @@
 // &seed=N) stages that scene instead of running the loop, paints it twice
 // and sets window.__shotReady for a screenshot.
 import * as THREE from 'three';
-import { STEP, SEED_DEFAULT, WORLD, CAMERA, VEHICLE, wantedFromHeat } from './config.js';
+import { STEP, SEED_DEFAULT, WORLD, CAMERA, VEHICLE, VEHICLE_CONFIGS, wantedFromHeat } from './config.js';
 import { generateCity, districtAtPoint, buildingColliders } from './city.js';
 import { makeRng } from './rng.js';
 import { buildRoadGraph } from './roadgraph.js';
@@ -143,9 +143,25 @@ function refreshDerived() {
     : player.speed() * 3.6;
   state.clockText = clockText();
   state.hint = state.onFoot
-    ? 'WASD move · Shift sprint · E enter car · F fire · Q weapon · R reload · P pause'
-    : 'W/S drive · A/D steer · Space brake · E exit · F drive-by · Q weapon · R reload';
+    ? 'WASD move · E enter car · F fire · Q weapon'
+    : 'W/S drive · A/D steer · Space brake · E exit';
   state.combat = combat ? { ...getAmmo(combat), kills: combat.kills, hitMarker: combat.hitMarkerTimer > 0 } : null;
+  // HUD (Day 4B): car name for the speed panel + the interaction prompt.
+  // On foot near an enterable car, the prompt names the car to steal.
+  state.carName = world.playerCar
+    ? (VEHICLE_CONFIGS[world.playerCar.kind]?.name ?? '').toUpperCase() : '';
+  state.interact = '';
+  if (state.onFoot) {
+    let best = null, bestD = 3;
+    for (const c of [...parked, ...traffic.cars]) {
+      const d = Math.hypot(c.x - state.player.x, c.z - state.player.z);
+      if (d < bestD) { best = c; bestD = d; }
+    }
+    if (best) {
+      const name = (VEHICLE_CONFIGS[best.kind]?.name ?? best.kind ?? 'CAR').toUpperCase();
+      state.interact = `E — STEAL ${name}`;
+    }
+  }
   state.cars = traffic.cars.map((c) => ({ x: c.x, z: c.z }));
   state.playerCar = world.playerCar ? { x: world.playerCar.x, z: world.playerCar.z } : null;
   state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];

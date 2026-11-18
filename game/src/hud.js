@@ -3,21 +3,26 @@
 // anything: top-left mission + wanted, top-right money + clock,
 // bottom-left circular minimap, bottom-right speed + district, bottom
 // centre health. Compact on purpose — it must not wrap at 768px wide.
+// Day 4B: patrol line wraps in a widened panel (state stated once),
+// dialogue moved to the left rail (off the road/car), crosshair only
+// on foot, interaction prompt + car name added. Crosshair rule: on
+// foot = weapon ready = shown; driving = hidden (no aim input in car).
 import { districtAtPoint, streetAtPoint } from './city.js';
 import { lightPhase } from './police.js';
 
 export function createHud(city) {
   const $ = (id) => document.getElementById(id);
   const el = {
-    mission: $('hud-mission'), wanted: $('hud-wanted'), money: $('hud-money'),
+    mission: $('hud-mission'), objective: $('hud-objective'),
+    wanted: $('hud-wanted'), money: $('hud-money'),
     clock: $('hud-clock'), district: $('hud-district'), street: $('hud-street'),
     healthFill: $('hud-health-fill'), healthText: $('hud-health-text'),
-    speed: $('hud-speed'), mode: $('hud-mode'), banner: $('hud-banner'),
+    speed: $('hud-speed'), car: $('hud-car'), mode: $('hud-mode'), banner: $('hud-banner'),
     minimap: $('hud-minimap'), hint: $('hud-hint'), patrol: $('hud-patrol'),
     dialogue: $('hud-dialogue'), speaker: $('hud-dialogue-speaker'),
     dialogueText: $('hud-dialogue-text'),
     choice0: $('hud-choice-0'), choice1: $('hud-choice-1'),
-    crosshair: $('hud-crosshair'),
+    crosshair: $('hud-crosshair'), interact: $('hud-interact'),
     ammoWeapon: $('hud-ammo-weapon'), ammoCount: $('hud-ammo-count'),
     ammoReload: $('hud-ammo-reload'),
   };
@@ -115,12 +120,29 @@ export function createHud(city) {
       el.district.textContent = district;
       el.street.textContent = street;
       el.healthFill.style.width = `${Math.max(0, state.health)}%`;
-      el.healthText.textContent = `${Math.round(state.health)}`;
+      el.healthText.textContent = `${Math.round(state.health)} HP`;
       el.speed.textContent = `${Math.round(state.speedKmh)}`;
-      // Combat HUD: crosshair (red X briefly on a hit) + ammo counter.
+      el.car.textContent = state.carName || '';
+      // Combat HUD: crosshair + ammo counter. The crosshair is
+      // CONTEXTUAL (Day 4B): shown only on foot, when the player has a
+      // weapon ready. While driving it sat on the car's roof and meant
+      // nothing — there is no aim input in the car, so it stays hidden.
+      // The hit marker only ever shows while the crosshair is visible.
+      const aiming = !!state.onFoot;
+      el.crosshair.hidden = !aiming;
+      el.crosshair.classList.toggle('interact', aiming && !!state.interact);
+      // Interaction prompt: only while an interaction is available
+      // (near a car to steal, etc. — main.js sets state.interact).
+      if (state.interact) {
+        el.interact.textContent = state.interact;
+        el.interact.hidden = false;
+      } else {
+        el.interact.textContent = '';
+        el.interact.hidden = true;
+      }
       const c = state.combat;
       if (c) {
-        el.crosshair.classList.toggle('hit', !!c.hitMarker);
+        el.crosshair.classList.toggle('hit', aiming && !!c.hitMarker);
         el.ammoWeapon.textContent = c.name.toUpperCase();
         el.ammoCount.innerHTML = `${c.mag} <span class="reserve">/ ${c.reserve}</span>`;
         el.ammoReload.hidden = !c.reloading;
@@ -129,14 +151,20 @@ export function createHud(city) {
       }
       el.mode.textContent = state.onFoot ? 'ON FOOT' : 'DRIVING';
       el.hint.textContent = state.hint || (state.onFoot
-        ? 'WASD move · Shift sprint · E enter car · P pause'
+        ? 'WASD move · E enter car · F fire · Q weapon'
         : 'W/S drive · A/D steer · Space brake · E exit');
       el.banner.textContent = state.banner || district;
-      // Mission card: job number + title + state + progress + objective.
+      // Mission card (Day 4B): title line on top, objective on its own
+      // line below — the old single line crammed job + title + state +
+      // progress + objective into one wrapping blob.
       const m = state.mission;
-      el.mission.textContent = (m && typeof m === 'object')
-        ? `${m.job} — ${m.title} · ${m.state} · ${m.done}/${m.total} · ${m.objective}`
-        : (m || '');
+      if (m && typeof m === 'object') {
+        el.mission.textContent = `${m.job} — ${m.title} · ${m.state} · ${m.done}/${m.total}`;
+        el.objective.textContent = m.objective || '';
+      } else {
+        el.mission.textContent = m || '';
+        el.objective.textContent = '';
+      }
       // Dialogue box: speaker + current ink line + choice buttons.
       const d = state.dialogue;
       if (d && d.text) {
@@ -157,10 +185,23 @@ export function createHud(city) {
         el.dialogue.hidden = true;
       }
       // Patrol response line, only while wanted: per-unit distance +
-      // status, short form so it fits one line at 768 px.
+      // status. Day 4B: the state is stated ONCE when every unit shares
+      // it ("Patrol 3 · CHASE — Luna-1 13m · Luna-2 5m · Luna-3 19m")
+      // instead of repeating CHASE three times, and the CSS lets the
+      // line wrap inside the widened panel — the old nowrap line was
+      // clipped at the panel's right edge at 768 px.
       if (state.wanted >= 1 && state.police && state.police.length > 0) {
-        const bits = state.police.map((u) => `${u.name.replace('Unit ', '')} ${u.dist}m ${u.state}`);
-        el.patrol.textContent = `Patrol ${state.police.length} — ${bits.join(' · ')}`;
+        const units = state.police.map((u) => ({
+          name: u.name.replace('Unit ', ''), dist: u.dist, state: u.state,
+        }));
+        const states = [...new Set(units.map((u) => u.state))];
+        // Non-breaking spaces inside each unit bit, so a wrap can only
+        // happen at the '·' separators — never mid-unit ("Luna-3" on
+        // one line, "19m" on the next).
+        const bits = units.map((u) => `${u.name}\u00A0${u.dist}m${states.length === 1 ? '' : `\u00A0${u.state}`}`).join(' · ');
+        el.patrol.textContent = states.length === 1
+          ? `Patrol ${units.length} · ${states[0]} — ${bits}`
+          : `Patrol ${units.length} — ${bits}`;
         el.patrol.hidden = false;
       } else {
         el.patrol.textContent = '';

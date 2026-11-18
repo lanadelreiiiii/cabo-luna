@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { Story, Compiler } from '../../../../custom-skills/ink-mission-system/node_modules/inkjs/dist/ink-full.mjs';
+import { Story, Compiler } from '../vendor/ink-full.mjs';
 import { createMissionManager } from '../src/missions.js';
 import { MISSIONS, resolveManifest, CHAIN } from '../src/mission-data.js';
 import { createMissionChain } from '../src/mission-chain.js';

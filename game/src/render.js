@@ -235,9 +235,11 @@ export function createPlayerMesh(scene) {
   return group;
 }
 
-// Third-person follow camera: orbit yaw/pitch around the player.
-export function updateCamera(camera, playerState, shotCam) {
-  const dist = CAMERA.distance, h = CAMERA.height;
+// Third-person follow camera: orbit yaw/pitch around the focus.
+// camOpts overrides distance/height (driving uses a longer chase cam).
+export function updateCamera(camera, playerState, shotCam, camOpts) {
+  const dist = camOpts?.distance ?? CAMERA.distance;
+  const h = camOpts?.height ?? CAMERA.height;
   const yaw = playerState.yaw, pitch = playerState.pitch;
   let cx, cy, cz, tx, ty, tz;
   if (shotCam) {
@@ -258,3 +260,132 @@ export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
 export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
+
+// ---- Vehicles + pedestrians -----------------------------------------
+// One shared geometry/material set for all cars; bodies are per-car
+// meshes (colour varies), wheels and headlights are InstancedMeshes so
+// 18 cars still cost ~3 draw calls for wheels + lights.
+const CAR_BODY_GEO = new THREE.BoxGeometry(1, 1, 1);
+const CAR_CABIN_GEO = new THREE.BoxGeometry(1, 1, 1);
+const WHEEL_GEO = new THREE.CylinderGeometry(0.36, 0.36, 0.28, 10);
+const LIGHT_GEO = new THREE.BoxGeometry(0.32, 0.16, 0.12);
+const WHEEL_MAT = new THREE.MeshLambertMaterial({ color: 0x1c1c20 });
+const LIGHT_MAT = new THREE.MeshLambertMaterial({
+  color: 0xfff2c0, emissive: 0xffe9a0, emissiveIntensity: 0.9,
+});
+const PED_BODY_GEO = new THREE.CapsuleGeometry(0.32, 0.7, 4, 8);
+const PED_HEAD_GEO = new THREE.SphereGeometry(0.22, 10, 8);
+const PED_HEAD_MAT = new THREE.MeshLambertMaterial({ color: 0xe8b98a });
+
+export function createVehicleRig(scene, cars, peds) {
+  // Bodies are keyed by car id and created lazily: world.reset() builds
+  // fresh car objects, so sync() must match the current list, not the
+  // list this rig was first built from. Wheels/lights are InstancedMesh
+  // capacity for the initial fleet size; the fleet size never grows.
+  const bodies = new Map();
+  function bodyFor(car) {
+    let entry = bodies.get(car.id);
+    if (entry) { entry.car = car; return entry; }
+    const group = new THREE.Group();
+    const bodyMat = new THREE.MeshLambertMaterial({ color: car.color });
+    const body = new THREE.Mesh(CAR_BODY_GEO, bodyMat);
+    body.scale.set(car.width, 0.62, car.length);
+    body.position.y = 0.62;
+    body.castShadow = true;
+    const cabin = new THREE.Mesh(CAR_CABIN_GEO, new THREE.MeshLambertMaterial({ color: 0x2c3e50 }));
+    cabin.scale.set(car.width * 0.82, 0.55, car.length * 0.45);
+    cabin.position.set(0, 1.18, -car.length * 0.08);
+    cabin.castShadow = true;
+    group.add(body, cabin);
+    scene.add(group);
+    entry = { car, group, body, cabin };
+    bodies.set(car.id, entry);
+    return entry;
+  }
+  for (const car of cars) bodyFor(car);
+  const wheels = new THREE.InstancedMesh(WHEEL_GEO, WHEEL_MAT, Math.max(1, cars.length * 4));
+  wheels.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(wheels);
+  const lights = new THREE.InstancedMesh(LIGHT_GEO, LIGHT_MAT, Math.max(1, cars.length * 2));
+  lights.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(lights);
+
+  const pedBodies = new THREE.InstancedMesh(PED_BODY_GEO, new THREE.MeshLambertMaterial({ color: 0xffffff }), Math.max(1, peds.length));
+  pedBodies.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  const pedHeads = new THREE.InstancedMesh(PED_HEAD_GEO, PED_HEAD_MAT, Math.max(1, peds.length));
+  pedHeads.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(pedBodies, pedHeads);
+  const pedColor = new THREE.Color();
+
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const pos = new THREE.Vector3(), scl = new THREE.Vector3(1, 1, 1);
+  const wheelQ = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2));
+
+  function sync(carList, pedList) {
+    const seen = new Set();
+    for (const car of carList) {
+      const { group, body, cabin } = bodyFor(car);
+      // Size follows the current car: ids are reused across resets and
+      // a sedan may take over a sport's id.
+      body.scale.set(car.width, 0.62, car.length);
+      cabin.scale.set(car.width * 0.82, 0.55, car.length * 0.45);
+      cabin.position.set(0, 1.18, -car.length * 0.08);
+      group.position.set(car.x, 0, car.z);
+      group.rotation.set(car.pitch, car.heading, car.roll);
+      group.visible = true;
+      seen.add(car.id);
+    }
+    for (const [id, { group }] of bodies) {
+      if (!seen.has(id)) group.visible = false;
+    }
+    let wi = 0, li = 0;
+    for (const car of carList) {
+      const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
+      const rx = -fz, rz = fx;
+      const wheelSpots = [
+        [-0.85, 1.35, 1], [0.85, 1.35, 1], [-0.85, -1.35, 0], [0.85, -1.35, 0],
+      ];
+      for (const [ox, oz, front] of wheelSpots) {
+        const wx = car.x + rx * ox + fx * oz;
+        const wz = car.z + rz * ox + fz * oz;
+        // Front wheels yaw with the steer angle.
+        e.set(0, car.heading + (front ? car.steer * 0.7 : 0), 0);
+        q.setFromEuler(e).multiply(wheelQ);
+        pos.set(wx, 0.36, wz);
+        m.compose(pos, q, scl);
+        wheels.setMatrixAt(wi++, m);
+      }
+      for (const ox of [-0.6, 0.6]) {
+        const lx = car.x + rx * ox + fx * (car.length / 2 - 0.05);
+        const lz = car.z + rz * ox + fz * (car.length / 2 - 0.05);
+        e.set(0, car.heading, 0);
+        q.setFromEuler(e);
+        pos.set(lx, 0.62, lz);
+        m.compose(pos, q, scl);
+        lights.setMatrixAt(li++, m);
+      }
+    }
+    wheels.count = wi;
+    wheels.instanceMatrix.needsUpdate = true;
+    lights.count = li;
+    lights.instanceMatrix.needsUpdate = true;
+    pedList.forEach((p, i) => {
+      pedBodies.setColorAt(i, pedColor.setHex(p.shirt));
+      e.set(0, p.heading, 0);
+      q.setFromEuler(e);
+      pos.set(p.x, 0.85, p.z);
+      m.compose(pos, q, scl);
+      pedBodies.setMatrixAt(i, m);
+      pos.set(p.x, 1.62, p.z);
+      m.compose(pos, q, scl);
+      pedHeads.setMatrixAt(i, m);
+    });
+    pedBodies.count = pedList.length;
+    pedHeads.count = pedList.length;
+    if (pedBodies.instanceColor) pedBodies.instanceColor.needsUpdate = true;
+    pedBodies.instanceMatrix.needsUpdate = true;
+    pedHeads.instanceMatrix.needsUpdate = true;
+  }
+  return { sync, bodies };
+}
+

@@ -12,7 +12,7 @@ export function createHud(city) {
     clock: $('hud-clock'), district: $('hud-district'), street: $('hud-street'),
     healthFill: $('hud-health-fill'), healthText: $('hud-health-text'),
     speed: $('hud-speed'), mode: $('hud-mode'), banner: $('hud-banner'),
-    minimap: $('hud-minimap'),
+    minimap: $('hud-minimap'), hint: $('hud-hint'),
   };
   const mapCtx = el.minimap.getContext('2d');
   const mapSize = el.minimap.width;
@@ -23,7 +23,7 @@ export function createHud(city) {
     return out;
   }
 
-  function drawMinimap(px, pz, yaw) {
+  function drawMinimap(px, pz, yaw, trafficCars, playerCar) {
     const g = mapCtx;
     const scale = mapSize / (city.size + 80);
     const toMap = (x, z) => [mapSize / 2 + (x - 0) * scale, mapSize / 2 + (z - 0) * scale];
@@ -56,13 +56,23 @@ export function createHud(city) {
     const [lx, ly] = toMap(city.landmark.x, city.landmark.z);
     g.fillStyle = '#ffd98a';
     g.beginPath(); g.arc(lx, ly, 3, 0, Math.PI * 2); g.fill();
-    // Player dot + facing wedge.
-    const [pxm, pzm] = toMap(px, pz);
+    // Traffic cars: pale dots. The player's car (when driving) is red.
+    if (trafficCars) {
+      g.fillStyle = '#cfd8dc';
+      for (const c of trafficCars) {
+        const [cx, cy] = toMap(c.x, c.z);
+        g.beginPath(); g.arc(cx, cy, 2, 0, Math.PI * 2); g.fill();
+      }
+    }
+    // Player dot + facing wedge (on foot), or the player car (driving).
+    const [pxm, pzm] = toMap(playerCar ? playerCar.x : px, playerCar ? playerCar.z : pz);
     g.fillStyle = '#ff5a3d';
     g.beginPath(); g.arc(pxm, pzm, 4, 0, Math.PI * 2); g.fill();
-    g.strokeStyle = '#ffffff'; g.lineWidth = 1.5;
-    g.beginPath(); g.moveTo(pxm, pzm);
-    g.lineTo(pxm - Math.sin(yaw) * 9, pzm - Math.cos(yaw) * 9); g.stroke();
+    if (!playerCar) {
+      g.strokeStyle = '#ffffff'; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(pxm, pzm);
+      g.lineTo(pxm - Math.sin(yaw) * 9, pzm - Math.cos(yaw) * 9); g.stroke();
+    }
     g.restore();
     g.strokeStyle = 'rgba(255,255,255,0.85)'; g.lineWidth = 2;
     g.beginPath(); g.arc(mapSize / 2, mapSize / 2, mapSize / 2 - 1, 0, Math.PI * 2); g.stroke();
@@ -82,9 +92,12 @@ export function createHud(city) {
       el.healthText.textContent = `${Math.round(state.health)}`;
       el.speed.textContent = `${Math.round(state.speedKmh)}`;
       el.mode.textContent = state.onFoot ? 'ON FOOT' : 'DRIVING';
+      el.hint.textContent = state.hint || (state.onFoot
+        ? 'WASD move · Shift sprint · E enter car · P pause'
+        : 'W/S drive · A/D steer · Space brake · E exit');
       el.banner.textContent = state.banner || district;
       el.mission.textContent = state.mission;
-      drawMinimap(p.x, p.z, p.yaw);
+      drawMinimap(p.x, p.z, p.yaw, state.cars, state.onFoot ? null : state.playerCar);
     },
     showScreen(screen) {
       document.getElementById('screen-title').hidden = screen !== 'title';

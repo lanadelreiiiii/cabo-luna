@@ -3,6 +3,7 @@
 export const ACTION_CONFIRM = 'confirm';
 export const ACTION_PAUSE = 'pause';
 export const ACTION_JUMP = 'jump';
+export const ACTION_ENTER = 'enter';
 export const ACTION_SPRINT = 'sprint';
 
 const KEY_ACTIONS = {
@@ -10,6 +11,7 @@ const KEY_ACTIONS = {
   Space: ACTION_JUMP,
   Escape: ACTION_PAUSE,
   KeyP: ACTION_PAUSE,
+  KeyE: ACTION_ENTER,
 };
 
 export function createInput(canvas) {
@@ -63,6 +65,18 @@ export function createInput(canvas) {
       return { x: x / len, z: z / len };
     },
     sprinting() { return keys.has('ShiftLeft') || keys.has('ShiftRight'); },
+    // Driving snapshot: W/S throttle and brake/reverse, A/D steer,
+    // Space handbrake. Read only while driving.
+    drive() {
+      const throttle = (keys.has('KeyW') || keys.has('ArrowUp')) ? 1 : 0;
+      const brake = (keys.has('KeyS') || keys.has('ArrowDown')) ? 1 : 0;
+      let steer = 0;
+      if (keys.has('KeyA') || keys.has('ArrowLeft')) steer -= 1;
+      if (keys.has('KeyD') || keys.has('ArrowRight')) steer += 1;
+      return { throttle, brake, steer, handbrake: keys.has('Space') };
+    },
+    // Raw key probe for the game loop (e.g. driving vs on-foot hints).
+    has(code) { return keys.has(code); },
     // Pixel drag since last read; consumed on read.
     orbit() {
       const out = { yaw: yawDelta, pitch: pitchDelta };

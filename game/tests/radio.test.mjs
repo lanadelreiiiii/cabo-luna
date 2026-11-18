@@ -68,11 +68,23 @@ test('radio defaults OFF; cycling walks OFF -> 3 stations -> OFF', () => {
   assert.equal(radioHud(r), 'RADIO OFF');
   assert.equal(currentStation(r), null);
   assert.equal(cycleRadio(r).id, 'luna-fm');
-  assert.equal(radioHud(r), 'LUNA FM 88.1');
+  assert.equal(radioHud(r), 'LUNA FM 88.1 · Sunset Drive');
   assert.equal(cycleRadio(r).id, 'brisa-beat');
   assert.equal(cycleRadio(r).id, 'faro');
   assert.equal(cycleRadio(r), null);
   assert.equal(radioHud(r), 'RADIO OFF');
+});
+
+test('radio on in shot mode: the staged state reads the station + tagline', () => {
+  // Day 5D: stageShot sets stationIndex 0 on the real radio object,
+  // so the shot-mode HUD truthfully reads the station. No audio
+  // player exists in shot mode — the state, not the sound, is what
+  // the HUD reports.
+  const r = createRadio();
+  assert.equal(radioHud(r), 'RADIO OFF');
+  r.stationIndex = 0; r.step = 0;
+  assert.equal(currentStation(r).id, 'luna-fm');
+  assert.equal(radioHud(r), 'LUNA FM 88.1 · Sunset Drive');
 });
 
 test('cycling resets the step so a station starts on its first note', () => {

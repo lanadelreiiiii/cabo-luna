@@ -249,15 +249,25 @@ export function createHud(city) {
         // with a "+N" tail — a fourth unit pushed the line to two
         // rows in the combat shot, and the minimap still shows all
         // of them.
+        // Day 5D: the line wrapped to 2 lines again once the AIR
+        // suffix landed (hero + combat). Compacted back to one line:
+        // the " — " after the shared state is dropped ("CHASE Luna-1
+        // 13m …"), and the air token is "AIR 20m" (the "1" in "AIR 1"
+        // bought nothing — Air-1 is the only helicopter, and the
+        // minimap ring already names it). Same information — named
+        // units + distances + states — in 51 chars (hero) / 56
+        // (combat), which fit the 280 px panel at the 9.5 px patrol
+        // font (measured: 257.7 / 268.2 px; at 10 px combat was
+        // 282.4 px and wrapped).
         const shown = units.slice(0, 3);
         const extra = units.length - shown.length;
         const bits = shown.map((u) => `${u.name}\u00A0${u.dist}m${states.length === 1 ? '' : `\u00A0${u.state[0]}`}`).join(' · ')
           + (extra > 0 ? ` +${extra}` : '')
           // Phase 6: Air-1 rides along on the patrol line when the
           // helicopter is up — it is air support, not a 5th ground unit.
-          + (state.heli?.active ? ` · AIR\u00A01\u00A0${state.heli.dist}m` : '');
+          + (state.heli?.active ? ` · AIR\u00A0${state.heli.dist}m` : '');
         el.patrol.textContent = states.length === 1
-          ? `${states[0]} — ${bits}`
+          ? `${states[0]} ${bits}`
           : bits;
         el.patrol.hidden = false;
       } else {

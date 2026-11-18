@@ -92,13 +92,42 @@ test('stageHelicopter puts the heli in a fixed visible pose', () => {
   const car = { x: 40, z: 113 };
   stageHelicopter(h, car);
   assert.equal(h.active, true);
-  assert.equal(h.x, car.x + 18);
-  assert.equal(h.z, car.z + 8);
-  assert.equal(h.y, 8); // staged LOW + screen-right so it sits inside the chase-camera frame (see helicopter.js)
+  assert.equal(h.x, car.x + 28);
+  assert.equal(h.z, car.z + 4);
+  assert.equal(h.y, 11); // staged LOW + screen-right so it sits inside the chase-camera frame (see helicopter.js)
+  // Side profile to the east-looking chase camera: the body long axis
+  // is near north-south, not end-on (old π/2 heading foreshortened
+  // the 3.4 m body to its 1.5 m width).
+  assert.ok(h.heading >= 0 && h.heading < Math.PI / 2, `heading ${h.heading}`);
   // Staging is a pose, not a spawn: re-staging gives the same pose.
   const first = [h.x, h.y, h.z, h.rotor];
   stageHelicopter(h, car);
   assert.deepEqual([h.x, h.y, h.z, h.rotor], first);
+});
+
+// Day 5D: the old staged spot (+18, +8, y 8) put the heli exactly
+// behind a palm crown — invisible at a glance. The new spot must
+// project inside the chase-camera frame, clear of the mission panel
+// (x > 320) and far on screen from every palm crown.
+test('staged heli is visible: in frame, clear of the panel and of palm crowns', async () => {
+  const { generateCity } = await import('../src/city.js');
+  const { chaseCameraPose, projectToScreen, fovForSpeed } = await import('../src/camera.js');
+  const city = generateCity(1);
+  const car = { x: 123.2, z: 113.1, heading: Math.PI / 2, y: 0 };
+  const h = createHelicopter();
+  stageHelicopter(h, car);
+  const pose = chaseCameraPose(car);
+  const fov = fovForSpeed(28.6);
+  const s = projectToScreen(pose, fov, 768 / 480, { x: h.x, y: h.y, z: h.z });
+  assert.equal(s.behind, false);
+  assert.ok(s.x > 320 && s.x < 768, `heli screen x ${s.x}`);
+  assert.ok(s.y > 0 && s.y < 240, `heli screen y ${s.y}`);
+  for (const p of city.palms) {
+    const ps = projectToScreen(pose, fov, 768 / 480, { x: p.x, y: p.h, z: p.z });
+    if (ps.behind) continue;
+    const d = Math.hypot(ps.x - s.x, ps.y - s.y);
+    assert.ok(d > 60, `palm crown at (${ps.x.toFixed(0)}, ${ps.y.toFixed(0)}) only ${d.toFixed(0)} px from heli`);
+  }
 });
 
 test('resetHelicopter clears an active heli', () => {

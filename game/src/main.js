@@ -808,7 +808,7 @@ let heliCone = null;
 function syncHelicopter() {
   if (!heliGroup) {
     heliGroup = new THREE.Group();
-    const bodyMat = new THREE.MeshLambertMaterial({ color: 0xe8e8e8 });
+    const bodyMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.1, 3.4), bodyMat);
     body.position.y = 0;
     const stripe = new THREE.Mesh(
@@ -822,8 +822,11 @@ function syncHelicopter() {
     fin.position.set(0, 0.6, -4.1);
     heliRotor = new THREE.Group();
     const bladeMat = new THREE.MeshBasicMaterial({ color: 0x222222 });
-    const blade1 = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.06, 0.32), bladeMat);
-    const blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.06, 5.2), bladeMat);
+    // Day 5D: rotor disc 5.2 -> 6.4 m, blades widened 0.32 -> 0.45 —
+    // the staged heli read as a ~20 px speck partly behind a palm;
+    // the disc is the part that reads at 768x480.
+    const blade1 = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.06, 0.45), bladeMat);
+    const blade2 = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.06, 6.4), bladeMat);
     heliRotor.add(blade1, blade2);
     heliRotor.position.y = 0.85;
     const lamp = new THREE.Mesh(

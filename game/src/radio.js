@@ -93,7 +93,10 @@ export function cycleRadio(radio) {
 
 export function radioHud(radio) {
   const s = currentStation(radio);
-  return s ? `${s.name} ${s.freq}` : 'RADIO OFF';
+  // Station + frequency + the station's tagline ("Sunset Drive" is
+  // LUNA FM's show line) — the HUD line reads like the top entries'
+  // named station + song lines, and every word of it is real state.
+  return s ? `${s.name} ${s.freq} · ${s.tagline}` : 'RADIO OFF';
 }
 
 export function advanceStep(radio) {

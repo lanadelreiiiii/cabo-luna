@@ -179,10 +179,79 @@ function combatShotCam(world, guard) {
   };
 }
 
+// Foot-shot interact car, relative to the player (who stands at
+// shop.x, shop.z + 6.5 facing the sign). Day 5D: the car used to be
+// staged 1.5 m south of the player, between the camera and the
+// player, so the player's lower half hid behind its roof. The car
+// now sits north-west of the player: 2.4 m lateral clears the player
+// in frame, and 2.7 m away keeps the E prompt live (interact range
+// is 3 m). The car is placed AFTER the 60 staging steps — staged
+// before them it drifted ~2 m north in 1 s and ended up overlapping
+// the player again.
+export const FOOT_CAR_OFFSET = { dx: -2.4, dz: -1.3 };
+
+// Combat background traffic: cars on the roads behind the fight, so
+// the harbor shot is not an empty lot. All three sit on real road
+// lines (x = -150 vertical, z = 110 coastal) and project into the
+// frame's background (verified by projection against the combat
+// camera) without touching the framed guard's screen box.
+export const COMBAT_BACKGROUND_TRAFFIC = [
+  { x: -150, z: 92, heading: Math.PI }, // north on the x=-150 road, right background
+  { x: -150, z: 84, heading: Math.PI }, // further north, far-right edge
+  { x: -168, z: 110, heading: -Math.PI / 2 }, // west on the coastal road, mid-left
+];
+
+// Combat pursuit staging: the responding units sit at genuinely
+// different ranges from the player instead of the spawn ring's four
+// identical 43 m. Offsets east along the coastal road; the distances
+// are computed live by policeStatus from these positions, never
+// hardcoded into the HUD. States are left exactly as the sim gave
+// them (PATROL here) — only positions are staged.
+export const COMBAT_PURSUIT_SPOTS = [
+  { dx: 18, dz: 1 },
+  { dx: 31, dz: 4 },
+  { dx: 47, dz: 1 },
+  { dx: 64, dz: 4 },
+];
+
+export function stageCombatPursuit(world) {
+  const p = world.player.state;
+  if (!world.police) return;
+  world.police.units.forEach((unit, i) => {
+    const spot = COMBAT_PURSUIT_SPOTS[i % COMBAT_PURSUIT_SPOTS.length];
+    unit.car.x = p.x + spot.dx;
+    unit.car.z = p.z + spot.dz;
+    unit.car.heading = Math.PI / 2;
+  });
+}
+
+export function stageCombatBackground(world) {
+  for (let i = 0; i < Math.min(COMBAT_BACKGROUND_TRAFFIC.length, world.traffic.cars.length); i++) {
+    const tc = world.traffic.cars[i];
+    const s = COMBAT_BACKGROUND_TRAFFIC[i];
+    tc.x = s.x; tc.z = s.z;
+    tc.heading = s.heading;
+    tc.speed = tc.cruise;
+    tc.waypoints = [
+      { x: s.x + Math.sin(s.heading) * 40, z: s.z + Math.cos(s.heading) * 40, nodeId: null },
+      { x: s.x + Math.sin(s.heading) * 90, z: s.z + Math.cos(s.heading) * 90, nodeId: null },
+    ];
+    tc.wpIndex = 0;
+    tc.state = 'DRIVE';
+  }
+}
+
 // Stage `world` to the named scene and return the screen to draw and an
 // optional fixed camera. Any unknown name stages the title.
 export function stageShot(name, world) {
   world.reset();
+  // Day 5D: the shot-mode game state genuinely has the radio ON —
+  // LUNA FM 88.1 'Sunset Drive' is the actual station in this world
+  // state, so the HUD line truthfully reads it. No audio player
+  // exists in shot mode (main.js creates it only outside ?shot=),
+  // so captures stay silent-safe; the state, not the sound, is what
+  // the HUD reports.
+  if (world.radio) { world.radio.stationIndex = 0; world.radio.step = 0; }
   if (name === 'play') {
     // Walk to the nearest parked car, steal it, then drive east.
     let entered = false;
@@ -236,17 +305,15 @@ export function stageShot(name, world) {
     // the shopfront that does face the south road — BAR EL FARO at
     // (-135.7, 102.5) — player 6.5 m south of it, facing north, so
     // the sign reads head-on. A traffic car is parked beside the
-    // player to supply the interact prompt; 60 zero steps after
-    // staging re-run refreshDerived so the prompt is live for the
-    // still, and give the mission manager a second to present its
-    // first dialogue choice (the staged car does not move at speed 0).
+    // player to supply the interact prompt (placed after the 60
+    // steps — see FOOT_CAR_OFFSET — so it cannot drift onto the
+    // player); 60 zero steps re-run refreshDerived so the prompt is
+    // live for the still, and give the mission manager a second to
+    // present its first dialogue choice.
     const shop = world.city.shops.find((s) => s.z > 100 && s.z < 116) ?? world.city.shops[0];
     world.placePlayer(shop.x, shop.z + 6.5);
     world.player.state.yaw = 0; // face north, toward the shop sign
     world.player.state.pitch = 0.2;
-    const tc = world.traffic.cars[0];
-    tc.x = shop.x - 1.5; tc.z = shop.z + 8; tc.heading = Math.PI / 2; tc.speed = 0;
-    tc.waypoints = [{ x: tc.x, z: tc.z, nodeId: null }]; tc.wpIndex = 0; tc.state = 'DRIVE';
     for (let i = 0; i < Math.min(2, world.peds.peds.length); i++) {
       const p = world.peds.peds[i];
       p.x = shop.x + (i === 0 ? -6 : 8); p.z = 102;
@@ -258,6 +325,16 @@ export function stageShot(name, world) {
     // present the first dialogue choice before we pick it.
     for (let i = 0; i < 60; i++) world.step(STEP, { x: 0, z: 0 }, false, false);
     if (world.hasMissionChoices?.()) world.chooseMission(0);
+    // Interact car, placed AFTER the steps (see FOOT_CAR_OFFSET):
+    // north-west of the player, clear of the player in frame, close
+    // enough for the E prompt. Two zero steps re-run refreshDerived
+    // so the prompt is live for the still.
+    const tc = world.traffic.cars[0];
+    tc.x = shop.x + FOOT_CAR_OFFSET.dx;
+    tc.z = shop.z + 6.5 + FOOT_CAR_OFFSET.dz;
+    tc.heading = Math.PI / 2; tc.speed = 0;
+    tc.waypoints = [{ x: tc.x, z: tc.z, nodeId: null }]; tc.wpIndex = 0; tc.state = 'DRIVE';
+    for (let i = 0; i < 2; i++) world.step(STEP, { x: 0, z: 0 }, false, false);
     syncStagedHud(world);
     return { screen: 'play', shotCam: null };
   }
@@ -278,9 +355,17 @@ export function stageShot(name, world) {
     // Peds wait at the plaza for this still: a wandering ped stood
     // exactly on the camera-to-guard line in early captures and
     // occluded the guard. The fight, not street life, is the subject.
+    // Day 5D: two peds wait in the background instead (see below) —
+    // the road behind the fight was empty in every capture.
     spawnHarborGuards(world.combat);
+    // Day 5D: two peds wait in the background behind the fight
+    // (north on the x=-150 road, clear of the camera-to-guard line);
+    // the rest wait at the plaza as before so nobody occludes the
+    // framed guard.
     world.peds.peds.forEach((ped, i) => {
-      ped.x = -28 + (i % 5) * 4; ped.z = 78 + Math.floor(i / 5) * 4;
+      if (i === 0) { ped.x = -147; ped.z = 92; }
+      else if (i === 1) { ped.x = -152; ped.z = 96; }
+      else { ped.x = -28 + (i % 5) * 4; ped.z = 78 + Math.floor(i / 5) * 4; }
       ped.target = { x: ped.x + 10, z: ped.z, line: 84, horizontal: true, side: 1 };
       ped.route = null; ped.state = 'WALK';
     });
@@ -308,6 +393,12 @@ export function stageShot(name, world) {
     // Frame the NEAR guard (dark uniform, red vest) at screen centre;
     // the far guard's tracer cuts across from the player's gun.
     const framed = byDist(living())[0] ?? world.combat.enemies[0];
+    // Day 5D: background traffic on the roads behind the fight, and
+    // the responding pursuit at genuinely different ranges — staged
+    // after the firing steps so nothing moves them again before the
+    // still, then the HUD is re-synced from the staged positions.
+    stageCombatBackground(world);
+    stageCombatPursuit(world);
     syncStagedHud(world);
     return { screen: 'play', shotCam: combatShotCam(world, framed) };
   }

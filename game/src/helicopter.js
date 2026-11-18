@@ -81,22 +81,30 @@ export function stepHelicopter(heli, dt, player, wanted, memory = null) {
 
 // Shot staging (shots.js hero/chase): force the helicopter into the
 // frame at a fixed, visible spot — ahead of the player car, screen-
-// RIGHT (+z clears the top-left mission panel) and LOW (8 m, not the
+// RIGHT (+z clears the top-left mission panel) and LOW (10 m, not the
 // live 26 m). The chase camera looks ~20° down at the car with a
 // ~70° vertical FOV, so the frame top is only ~15° above horizontal:
 // a heli at live altitude 26 m sits ~33° up and flies out of the
 // frame (verified: first staged capture showed no heli), and at
 // +26 m / 11 m / screen-left it read as a ~15 px speck against the
-// hills and the mission panel. At +18 m / 8 m / screen-right the
-// elevation from the camera is ~6°, the 3.4 m body reads ~50 px at
-// 768 wide, and the white body pops against the sunset sky.
-// Live-play rules (wanted >= 3) do not apply to a staged shot.
+// hills and the mission panel. Day 5D: the old +18 m / 8 m spot put
+// the heli exactly behind a palm crown (palm at 135.8, 120.9, h 7.8 —
+// the heli projected to (481, 77) and the crown to (499, 71), so the
+// body was invisible at a glance). The first Day 5D spot (+24 m /
+// 8 m / 10 m) still sat 34 px from that crown on screen — the crown
+// is in front of the heli, so 34 px is not clear. The new spot is
+// +28 m ahead, +4 m to the side, at 11 m: screen (422, 56) in clear
+// sky, 79 px from the nearest palm crown, and the heading is 0.35
+// rad so the 3.4 m body shows its SIDE profile to the east-looking
+// chase camera instead of end-on (the old π/2 heading foreshortened
+// it to its 1.5 m width). Live-play rules (wanted >= 3) do not
+// apply to a staged shot.
 export function stageHelicopter(heli, car) {
   heli.active = true;
-  heli.x = car.x + 18;
-  heli.z = car.z + 8;
-  heli.y = 8;
-  heli.heading = Math.PI / 2; // face east, along the road
+  heli.x = car.x + 28;
+  heli.z = car.z + 4;
+  heli.y = 11;
+  heli.heading = 0.35; // side profile to the chase camera, not end-on
   heli.rotor = 0.6;
   return heli;
 }

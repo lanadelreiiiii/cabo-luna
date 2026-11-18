@@ -83,7 +83,7 @@ test('patrol line: shared state stated once, all units + distances present', () 
   }));
   const t = els['hud-patrol'].textContent;
   assert.equal(els['hud-patrol'].hidden, false);
-  assert.match(t, /CHASE — Luna-1\s13m/);
+  assert.match(t, /CHASE Luna-1\s13m/);
   assert.match(t, /Luna-2\s5m/);
   assert.match(t, /Luna-3\s19m/);
   // State appears once, not once per unit (the old format repeated it
@@ -125,8 +125,53 @@ test('patrol line: four units collapse to three + count, still one line', () => 
     ],
   }));
   const t = els['hud-patrol'].textContent;
-  assert.match(t, /PATROL — Luna-1\s43m · Luna-2\s43m · Luna-3\s43m \+1/);
+  assert.match(t, /PATROL Luna-1\s43m · Luna-2\s43m · Luna-3\s43m \+1/);
   assert.doesNotMatch(t, /Luna-4/);
+});
+
+// Day 5D: patrol line is ONE line in the hero + combat shots. The
+// " — " after the shared state and the "1" in "AIR 1" pushed both
+// lines to two rows once the AIR suffix landed. The compact format
+// keeps every unit name + distance + the shared state + the AIR
+// token, inside a 56-char budget (the 280 px panel at the 9.5 px
+// patrol font — verified by offsetHeight in the browser check,
+// not just by counting here).
+test('patrol line: compact format — hero + combat fit the one-line budget', () => {
+  const hud = mount();
+  hud.update(baseState({
+    wanted: 3,
+    police: [
+      { name: 'Unit Luna-1', dist: 13, state: 'CHASE' },
+      { name: 'Unit Luna-2', dist: 5, state: 'CHASE' },
+      { name: 'Unit Luna-3', dist: 19, state: 'CHASE' },
+    ],
+    heli: { active: true, dist: 25 },
+  }));
+  const hero = els['hud-patrol'].textContent;
+  // NBSP (\u00A0) inside each unit bit — the HUD joins name/dist with
+  // a non-breaking space so a wrap can only happen at the '·' marks.
+  // Char budget is 56 (the 280 px panel at the 10 px patrol font);
+  // the browser check proves the pixel truth via offsetHeight.
+  assert.equal(hero, 'CHASE Luna-1\u00A013m · Luna-2\u00A05m · Luna-3\u00A019m · AIR\u00A025m');
+  assert.ok(hero.length <= 56, `hero patrol ${hero.length} chars`);
+  hud.update(baseState({
+    wanted: 5,
+    police: [
+      { name: 'Unit Luna-1', dist: 18, state: 'PATROL' },
+      { name: 'Unit Luna-2', dist: 31, state: 'PATROL' },
+      { name: 'Unit Luna-3', dist: 47, state: 'PATROL' },
+      { name: 'Unit Luna-4', dist: 64, state: 'PATROL' },
+    ],
+    heli: { active: true, dist: 17 },
+  }));
+  const combat = els['hud-patrol'].textContent;
+  assert.equal(combat, 'PATROL Luna-1\u00A018m · Luna-2\u00A031m · Luna-3\u00A047m +1 · AIR\u00A017m');
+  assert.ok(combat.length <= 56, `combat patrol ${combat.length} chars`);
+  // No em-dash separator and no "AIR 1" — those were the wrap triggers.
+  assert.doesNotMatch(hero, /—/);
+  assert.doesNotMatch(combat, /—/);
+  assert.doesNotMatch(hero, /AIR 1/);
+  assert.doesNotMatch(combat, /AIR 1/);
 });
 
 test('crosshair: hidden while driving, hidden on foot with nothing to aim at, shown when aiming', () => {

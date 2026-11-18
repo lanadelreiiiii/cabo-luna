@@ -19,6 +19,20 @@ import { createHud } from './hud.js';
 import { createInput, ACTION_CONFIRM, ACTION_PAUSE, ACTION_JUMP, ACTION_ENTER } from './input.js';
 import { stageShot } from './shots.js';
 import { saveGame, loadGame } from './save.js';
+import * as inkjs from 'inkjs';
+import { createMissionManager } from './missions.js';
+import { CHAIN, MISSIONS, resolveManifest } from './mission-data.js';
+import { createMissionChain } from './mission-chain.js';
+import { createCaboAdapter } from './mission-adapter.js';
+import { MISSION_01_JSON } from './stories/mission-01-delivery-gone-wrong.js';
+import { MISSION_02_JSON } from './stories/mission-02-wrong-place.js';
+import { MISSION_03_JSON } from './stories/mission-03-harbor-silence.js';
+
+const STORY_JSON = {
+  'mission-01-delivery-gone-wrong': MISSION_01_JSON,
+  'mission-02-wrong-place': MISSION_02_JSON,
+  'mission-03-harbor-silence': MISSION_03_JSON,
+};
 
 const MAX_FRAME = 0.25;
 
@@ -77,7 +91,14 @@ const state = {
   crimeHeat: 0,
   day: saved && saved.seed === seed ? saved.day : WORLD.dayStart,
   clockMinutes: WORLD.clockStartMinutes,
-  mission: 'Day 0 — Explore Cabo Luna. Learn the streets of Luna Vieja.',
+  mission: { job: 'JOB 1/3', title: 'A Delivery Gone Wrong', state: 'AVAILABLE', objective: 'Meet Yara at the Plaza del Reloj', done: 0, total: 5 },
+  // Mission chain progress persisted via save.js (Day 3A).
+  missionSave: {
+    completedMissions: saved?.completedMissions ?? [],
+    currentMissionId: saved?.currentMissionId ?? null,
+    missionStates: saved?.missionStates ?? null,
+  },
+  dialogue: null,
   banner: 'Plaza del Reloj',
   district: 'Luna Vieja',
   speedKmh: 0,
@@ -110,6 +131,10 @@ function refreshDerived() {
   state.police = police ? policeStatus(police, state.player.x, state.player.z) : [];
   state.flashTime = police ? police.elapsed : 0;
 }
+
+// Mission controller, created after the world below; world.reset() and
+// world.step() call into it when present (shots run before any UI).
+let missionCtl = null;
 
 // The world object the shot stager drives: reset + fixed-step advance.
 const world = {
@@ -151,7 +176,6 @@ const world = {
     car.owned = true;
     this.playerCar = car;
     state.onFoot = false;
-    state.mission = 'Stolen wheels — drive it, lose the heat, stay free.';
     player.state.x = car.x; player.state.z = car.z;
     player.state.yaw = car.heading + Math.PI;
     refreshDerived();
@@ -186,8 +210,8 @@ const world = {
     state.police = [];
     state.flashTime = 0;
     this.elapsed = 0;
-    state.mission = 'Day 0 — Explore Cabo Luna. Learn the streets of Luna Vieja.';
     state.clockMinutes = WORLD.clockStartMinutes;
+    if (missionCtl) missionCtl.restartChain();
     refreshDerived();
   },
   step(dt, move, sprint, jump, drive) {
@@ -229,9 +253,153 @@ const world = {
       car: pc ?? null,
     }, state);
     state.clockMinutes += dt * WORLD.clockMinutesPerSecond;
+    // Mission manager ticks last: police state (busted / chase) is fresh.
+    if (missionCtl) missionCtl.tick(dt);
     refreshDerived();
   },
 };
+
+// ---- Mission chain: JOB 1/3 -> 2/3 -> 3/3, driven by the InkJS
+// manager + the mission-chain state machine. Chain progress is kept in
+// state.missionSave and written by saveGame on every transition and on
+// the 10s autosave timer. A saved chain restores completed missions as
+// COMPLETED and the current mission as AVAILABLE (it resumes, not
+// mid-objective). ----
+function createMissionCtl() {
+  const adapter = createCaboAdapter(world, (text) => {
+    if (state.mission && typeof state.mission === 'object') state.mission.objective = text;
+  });
+  const manager = createMissionManager(inkjs, adapter);
+  const chain = createMissionChain(CHAIN, state.missionSave.missionStates);
+  let lastDialogue = null;
+
+  const ctl = {
+    manager,
+    chain,
+
+    syncMissionSave() {
+      state.missionSave = {
+        completedMissions: chain.completedIds(),
+        currentMissionId: chain.current(),
+        missionStates: chain.toJSON(),
+      };
+    },
+
+    sync(snap) {
+      const id = snap.missionId;
+      const manifest = MISSIONS[id];
+      const n = CHAIN.indexOf(id) + 1;
+      if (manifest) {
+        state.mission = {
+          job: `JOB ${n}/3`,
+          title: manifest.title,
+          state: chain.state(id),
+          objective: (state.mission && typeof state.mission === 'object' && state.mission.objective)
+            ? state.mission.objective : '',
+          done: snap.objectivesDone.length,
+          total: manifest.objectives.length,
+        };
+      }
+      if (snap.status === 'failed') {
+        state.mission.objective = `Mission failed (${snap.failReason}) — press R to retry`;
+      }
+      if (chain.current() === null && !manifest) {
+        state.mission = { job: 'JOB 3/3', title: 'Harbor Silence', state: 'COMPLETED', objective: 'All jobs done — the city is yours.', done: 3, total: 3 };
+      }
+      // Dialogue: last ink line (speaker from its tags) + live choices.
+      const lastLine = (snap.lines || []).filter((l) => l.text).pop();
+      if (lastLine) {
+        const speakerTag = (lastLine.tags || []).find((t) => t.startsWith('speaker:'));
+        lastDialogue = {
+          speaker: speakerTag ? speakerTag.slice('speaker:'.length) : '',
+          text: lastLine.text,
+          choices: snap.choices || [],
+        };
+      } else if (lastDialogue) {
+        lastDialogue = { ...lastDialogue, choices: snap.choices || [] };
+      }
+      state.dialogue = lastDialogue;
+    },
+
+    loadCurrent() {
+      const id = chain.current();
+      if (!id) return null;
+      chain.start(id);
+      const manifest = resolveManifest(id, city);
+      manager.loadCompiled(id, manifest, STORY_JSON[id]);
+      this.syncMissionSave();
+      this.sync(manager.start());
+      return id;
+    },
+
+    restartChain() {
+      const id = chain.current();
+      if (id && chain.state(id) === 'ACTIVE') chain.restart(id);
+      lastDialogue = null;
+      state.dialogue = null;
+      this.loadCurrent();
+    },
+
+    retry() {
+      if (manager.status !== 'failed') return;
+      const id = manager.missionId;
+      chain.retry(id);
+      lastDialogue = null;
+      this.loadCurrent();
+    },
+
+    tick(dt) {
+      const snap = manager.update(dt);
+      this.sync(snap);
+      if (snap.status === 'completed') {
+        const id = snap.missionId;
+        if (chain.state(id) === 'ACTIVE') {
+          chain.complete(id);
+          this.syncMissionSave();
+          saveGame(state);
+          this.sync(snap);
+          this.loadCurrent();
+        }
+      } else if (snap.status === 'failed') {
+        const id = snap.missionId;
+        if (chain.state(id) === 'ACTIVE') {
+          chain.fail(id);
+          this.syncMissionSave();
+          saveGame(state);
+          this.sync(snap);
+        }
+      }
+      return snap;
+    },
+
+    choose(i) {
+      try {
+        const snap = manager.choose(i);
+        this.sync(snap);
+        return snap;
+      } catch {
+        return manager.snapshot();
+      }
+    },
+
+    hasChoices() {
+      return manager.status === 'active' && manager.choices.length > 0;
+    },
+  };
+  return ctl;
+}
+
+missionCtl = createMissionCtl();
+// The shot stager (and HUD buttons / number keys) choose through these.
+world.chooseMission = (i) => missionCtl.choose(i);
+world.hasMissionChoices = () => missionCtl.hasChoices();
+hud.setChoiceHandler((i) => missionCtl.choose(i));
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'Digit1') missionCtl.choose(0);
+  if (e.code === 'Digit2') missionCtl.choose(1);
+  if (e.code === 'KeyR' && missionCtl.manager.status === 'failed') missionCtl.retry();
+});
 
 function draw(screen, shotCam) {
   rig.sync(world.allCars(), peds.peds, world.elapsed);

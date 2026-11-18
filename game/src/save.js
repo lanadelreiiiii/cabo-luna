@@ -11,6 +11,14 @@ export function saveGame(state) {
       district: state.district,
       seed: state.seed,
       day: state.day,
+      // Mission chain progress (Day 3A): completed ids, current id,
+      // and the per-mission LOCKED/AVAILABLE/ACTIVE/COMPLETED/FAILED map.
+      // Written by main.js into state.missionSave on every transition.
+      ...(state.missionSave ? {
+        completedMissions: state.missionSave.completedMissions ?? [],
+        currentMissionId: state.missionSave.currentMissionId ?? null,
+        missionStates: state.missionSave.missionStates ?? null,
+      } : {}),
     }));
     return true;
   } catch {
@@ -24,6 +32,7 @@ export function loadGame() {
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (typeof data.money !== 'number' || typeof data.x !== 'number') return null;
+    if (data.missionStates != null && typeof data.missionStates !== 'object') return null;
     return data;
   } catch {
     return null;

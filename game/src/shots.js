@@ -151,6 +151,10 @@ export function stageShot(name, world) {
     for (let i = 0; i < PLAY_DRIVE_STEPS; i++) {
       // Drive east down the south road, holding the lane.
       world.step(STEP, WALK, false, false, { ...DRIVE, steer: laneSteer(world, Math.PI / 2, i) });
+      // Stealing the car completes M1's first objective and opens the
+      // tone choice — pick it on the first drive step so the Mercado
+      // Norte objective is live for the rest of the shot.
+      if (i === 0 && world.hasMissionChoices?.()) world.chooseMission(0);
     }
     if (entered) stageStreetLife(world);
     syncStagedHud(world);

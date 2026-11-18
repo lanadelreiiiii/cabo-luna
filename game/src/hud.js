@@ -14,9 +14,15 @@ export function createHud(city) {
     healthFill: $('hud-health-fill'), healthText: $('hud-health-text'),
     speed: $('hud-speed'), mode: $('hud-mode'), banner: $('hud-banner'),
     minimap: $('hud-minimap'), hint: $('hud-hint'), patrol: $('hud-patrol'),
+    dialogue: $('hud-dialogue'), speaker: $('hud-dialogue-speaker'),
+    dialogueText: $('hud-dialogue-text'),
+    choice0: $('hud-choice-0'), choice1: $('hud-choice-1'),
   };
   const mapCtx = el.minimap.getContext('2d');
   const mapSize = el.minimap.width;
+  let choiceHandler = null;
+  el.choice0.addEventListener('click', () => { if (choiceHandler) choiceHandler(0); });
+  el.choice1.addEventListener('click', () => { if (choiceHandler) choiceHandler(1); });
 
   function stars(n) {
     let out = '';
@@ -93,6 +99,9 @@ export function createHud(city) {
   }
 
   return {
+    // Called by main.js once the mission manager exists; choice button
+    // clicks (and number keys) flow back through this handler.
+    setChoiceHandler(fn) { choiceHandler = fn; },
     update(state) {
       const p = state.player;
       const district = districtAtPoint(city, p.x, p.z);
@@ -110,7 +119,30 @@ export function createHud(city) {
         ? 'WASD move · Shift sprint · E enter car · P pause'
         : 'W/S drive · A/D steer · Space brake · E exit');
       el.banner.textContent = state.banner || district;
-      el.mission.textContent = state.mission;
+      // Mission card: job number + title + state + progress + objective.
+      const m = state.mission;
+      el.mission.textContent = (m && typeof m === 'object')
+        ? `${m.job} — ${m.title} · ${m.state} · ${m.done}/${m.total} · ${m.objective}`
+        : (m || '');
+      // Dialogue box: speaker + current ink line + choice buttons.
+      const d = state.dialogue;
+      if (d && d.text) {
+        el.dialogue.hidden = false;
+        el.speaker.textContent = d.speaker ? d.speaker.toUpperCase() : '';
+        el.dialogueText.textContent = d.text;
+        const btns = [el.choice0, el.choice1];
+        const choices = d.choices || [];
+        btns.forEach((btn, i) => {
+          if (choices[i]) {
+            btn.hidden = false;
+            btn.textContent = `${i + 1}. ${choices[i].text}`;
+          } else {
+            btn.hidden = true;
+          }
+        });
+      } else {
+        el.dialogue.hidden = true;
+      }
       // Patrol response line, only while wanted: per-unit distance +
       // status, short form so it fits one line at 768 px.
       if (state.wanted >= 1 && state.police && state.police.length > 0) {

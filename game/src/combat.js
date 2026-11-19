@@ -26,8 +26,8 @@ export const ENEMY_STATES = ['IDLE', 'PATROL', 'ALERT', 'INVESTIGATE', 'ENGAGE',
 // Harbor warehouse (M3 infiltrate target): roadX 0 = -150, roadZ 5 = 110.
 // Guards post around it and patrol a loop of the warehouse block.
 export const HARBOR_GUARDS = [
-  { x: -146, z: 106, waypoints: [[-146, 106], [-138, 112], [-146, 118], [-154, 112]] },
-  { x: -154, z: 114, waypoints: [[-154, 114], [-146, 120], [-138, 114], [-146, 108]] },
+  { x: -144, z: 109, waypoints: [[-146, 106], [-138, 112], [-146, 118], [-154, 112]] },
+  { x: -136, z: 100, waypoints: [[-154, 114], [-146, 120], [-138, 114], [-146, 108]] },
 ];
 
 function angleDiff(target, current) {

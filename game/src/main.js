@@ -739,15 +739,11 @@ function syncEnemies() {
   for (const [id, entry] of enemyMeshes) {
     if (!seen.has(id)) entry.group.visible = false;
   }
-  // Tracers: one THREE.Line per live tracer, fading with its life.
+  // Tracers: one stretched box per live tracer (a Line stays 1 px).
   const live = combat.tracers;
   while (tracerLines.length < live.length) {
-    const geo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(), new THREE.Vector3(),
-    ]);
-    const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
-      color: 0xffe9a0, transparent: true, opacity: 0.9,
-    }));
+    const line = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 1),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a0, transparent: true, opacity: 0.9 }));
     line.frustumCulled = false;
     scene.add(line);
     tracerLines.push(line);
@@ -756,16 +752,16 @@ function syncEnemies() {
     const line = tracerLines[i];
     line.visible = true;
     line.material.opacity = Math.max(0, (t.life / t.max)) * 0.9;
-    const pos = line.geometry.attributes.position;
-    pos.setXYZ(0, t.from.x, t.from.y, t.from.z);
-    pos.setXYZ(1, t.to.x, t.to.y, t.to.z);
-    pos.needsUpdate = true;
+    line.position.set((t.from.x + t.to.x) / 2, (t.from.y + t.to.y) / 2, (t.from.z + t.to.z) / 2);
+    line.lookAt(t.to.x, t.to.y, t.to.z);
+    line.scale.set(1, 1, Math.hypot(t.to.x - t.from.x, t.to.y - t.from.y, t.to.z - t.from.z));
   });
   for (let i = live.length; i < tracerLines.length; i++) tracerLines[i].visible = false;
-  // Muzzle flash: a small bright sprite at the player's gun for 60 ms.
+  // Muzzle flash: a 0.30 m ball at the gun for 60 ms, pushed 1.8 m
+  // out so it clears the player's head and the framed guard.
   if (!muzzleSprite) {
     muzzleSprite = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 8, 6),
+      new THREE.SphereGeometry(0.30, 8, 6),
       new THREE.MeshBasicMaterial({ color: 0xffe9a0 }),
     );
     scene.add(muzzleSprite);
@@ -776,7 +772,7 @@ function syncEnemies() {
     const yaw = car ? car.heading + Math.PI : p.yaw;
     const ox = car ? car.x : p.x, oz = car ? car.z : p.z;
     muzzleSprite.position.set(
-      ox - Math.sin(yaw) * 0.9, (car ? 1.4 : p.y + 1.5), oz - Math.cos(yaw) * 0.9,
+      ox - Math.sin(yaw) * 1.8, (car ? 1.4 : p.y + 1.5), oz - Math.cos(yaw) * 1.8,
     );
     muzzleSprite.visible = true;
   } else {

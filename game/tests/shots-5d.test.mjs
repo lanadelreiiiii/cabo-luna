@@ -1,8 +1,6 @@
-// Day 5D screenshot fixes — regression tests for the staging
-// constants and the HUD contrast tokens. The browser capture is the
-// pixel truth; these tests pin the invariants the frames depend on
-// so a later staging tweak cannot silently reintroduce them.
-// Run: node --test game/tests/shots-5d.test.mjs
+// Day 5D screenshot fixes — regression tests pinning the staging
+// constants the frames depend on; the browser capture is the pixel
+// truth. Run: node --test game/tests/shots-5d.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,7 +10,7 @@ import {
   FOOT_CAR_OFFSET, COMBAT_BACKGROUND_TRAFFIC, COMBAT_PURSUIT_SPOTS,
   stageCombatPursuit, stageCombatBackground,
 } from '../src/shots.js';
-import { projectToScreen } from '../src/camera.js';
+import { projectToScreen, frameCar } from '../src/camera.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const gameDir = join(here, '..');
@@ -30,7 +28,7 @@ test('foot car offset: clear of the player, inside interact range', () => {
 });
 
 // Combat pursuit: four genuinely different ranges, each at least
-// 8 m apart, all on/near the coastal road east of the player.
+// 8 m apart, all north of the player, up the x=-150 road.
 test('combat pursuit spots: distinct ranges, honestly spaced', () => {
   const dists = COMBAT_PURSUIT_SPOTS.map((s) => Math.round(Math.hypot(s.dx, s.dz)));
   assert.equal(new Set(dists).size, dists.length, `ranges must differ: ${dists}`);
@@ -44,27 +42,28 @@ test('combat pursuit spots: distinct ranges, honestly spaced', () => {
 
 test('stageCombatPursuit repositions units at the staged ranges', () => {
   const world = {
-    player: { state: { x: -141, z: 109 } },
+    player: { state: { x: -144, z: 112 } },
     police: {
       units: [0, 1, 2, 3].map(() => ({ car: { x: -98, z: 110, heading: 0, speed: 0 }, state: 'PATROL' })),
     },
   };
   stageCombatPursuit(world);
   const dists = world.police.units.map((u) =>
-    Math.round(Math.hypot(u.car.x - -141, u.car.z - 109)));
+    Math.round(Math.hypot(u.car.x - -144, u.car.z - 112)));
   assert.equal(new Set(dists).size, 4, `staged ranges must differ: ${dists}`);
-  // States are left exactly as the sim gave them — only positions
-  // are staged, never the state word.
-  assert.ok(world.police.units.every((u) => u.state === 'PATROL'));
+  // Wanted is 5: the staged response reads CHASE, so the patrol
+  // line matches the frame instead of contradicting the stars.
+  assert.ok(world.police.units.every((u) => u.state === 'CHASE'));
+  assert.ok(world.police.units.every((u) => u.car.heading === 0));
 });
 
-// Combat background: three cars on real road lines, projecting into
-// the frame background without touching the framed guard's box.
-test('combat background traffic: on road lines, in frame, clear of the guard', () => {
+// Combat background: three cars on a real road line, projecting into
+// the frame background without overlapping the framed guard's box.
+test('combat background traffic: on a road line, in frame, clear of the guard', () => {
   // Combat camera, mirrored from shots.js combatShotCam: player
-  // (-141, 109), framed guard (-146, 106), 5.5 m back / 2.2 m side.
-  const p = { x: -141, z: 109 };
-  const g = { x: -146, z: 106 };
+  // (-144, 112), framed guard (-144, 109), 5.5 m back / 2.2 m side.
+  const p = { x: -144, z: 112 };
+  const g = { x: -144, z: 109 };
   const dx = g.x - p.x, dz = g.z - p.z;
   const len = Math.hypot(dx, dz);
   const ux = dx / len, uz = dz / len;
@@ -73,16 +72,21 @@ test('combat background traffic: on road lines, in frame, clear of the guard', (
     position: { x: p.x - ux * 5.5 + sx * 2.2, y: 3.1, z: p.z - uz * 5.5 + sz * 2.2 },
     target: { x: g.x, y: 1.2, z: g.z },
   };
-  const guardScreen = projectToScreen(pose, 62, 768 / 480, { x: g.x, y: 1, z: g.z });
+  const chest = projectToScreen(pose, 62, 768 / 480, { x: g.x, y: 1.2, z: g.z });
+  const head = projectToScreen(pose, 62, 768 / 480, { x: g.x, y: 1.95, z: g.z });
+  const feet = projectToScreen(pose, 62, 768 / 480, { x: g.x, y: 0, z: g.z });
+  // Guard box: chest x ± 30 px, head to feet vertically.
+  const guardBox = { minX: chest.x - 30, maxX: chest.x + 30, minY: head.y, maxY: feet.y };
   for (const s of COMBAT_BACKGROUND_TRAFFIC) {
-    // On a real road line: x = -150 vertical or z = 110 coastal.
-    assert.ok(s.x === -150 || s.z === 110, `background car (${s.x}, ${s.z}) must sit on a road line`);
-    const scr = projectToScreen(pose, 62, 768 / 480, { x: s.x, y: 1, z: s.z });
-    assert.equal(scr.behind, false);
-    assert.ok(scr.x >= 0 && scr.x <= 768, `car (${s.x}, ${s.z}) projects off-frame at x=${scr.x.toFixed(0)}`);
-    assert.ok(scr.y >= 120 && scr.y <= 320, `car (${s.x}, ${s.z}) projects out of the background band at y=${scr.y.toFixed(0)}`);
-    const dGuard = Math.hypot(scr.x - guardScreen.x, scr.y - guardScreen.y);
-    assert.ok(dGuard > 90, `car (${s.x}, ${s.z}) only ${dGuard.toFixed(0)} px from the framed guard`);
+    // On a real road line: the z = 58 road far behind the fight.
+    assert.equal(s.z, 58, `background car (${s.x}, ${s.z}) must sit on the z=58 road line`);
+    const car = { x: s.x, z: s.z, heading: s.heading, width: 1.8, length: 4.4 };
+    const f = frameCar(pose, 62, 768 / 480, car);
+    assert.ok(f.inFrame, `car (${s.x}, ${s.z}) projects off-frame`);
+    assert.ok(f.minY >= 120 && f.maxY <= 320, `car (${s.x}, ${s.z}) out of the background band at y=${f.minY.toFixed(0)}..${f.maxY.toFixed(0)}`);
+    const overlap = f.minX < guardBox.maxX && f.maxX > guardBox.minX
+      && f.minY < guardBox.maxY && f.maxY > guardBox.minY;
+    assert.ok(!overlap, `car (${s.x}, ${s.z}) overlaps the framed guard's box`);
   }
 });
 

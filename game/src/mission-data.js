@@ -44,8 +44,8 @@ export const MISSIONS = {
     // Day 5A: guards are manifest-driven (main.js spawns them for any
     // mission that declares them) — no more hardcoded mission id.
     guards: [
-      { x: -146, z: 106, waypoints: [[-146, 106], [-138, 112], [-146, 118], [-154, 112]] },
-      { x: -154, z: 114, waypoints: [[-154, 114], [-146, 120], [-138, 114], [-146, 108]] },
+      { x: -144, z: 109, waypoints: [[-146, 106], [-138, 112], [-146, 118], [-154, 112]] },
+      { x: -136, z: 100, waypoints: [[-154, 114], [-146, 120], [-138, 114], [-146, 108]] },
     ],
     objectives: [
       { id: 'infiltrate_harbor', kind: 'reach', roadX: 0, roadZ: 5, radius: 12, onFoot: true, hud: 'Infiltrate the Puerto Luna warehouse on foot' },

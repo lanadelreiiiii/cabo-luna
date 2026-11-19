@@ -153,20 +153,13 @@ function aimAt(world, tx, tz) {
   p.pitch = 0.1;
 }
 
-// Combat camera: a fixed side-on pose built from the live positions,
-// so the frame is composed rather than left to the follow camera.
-// The camera sits ~5.5 m behind the player (relative to the framed
-// guard) and ~2.2 m to the side, 3.1 m up, looking at the framed
-// guard's chest. The guard lands near screen centre — where the
-// crosshair lives — while the player sits off-centre in the
-// foreground, so the crosshair never sits on the player's back and
-// the tracer from the player's gun to the far guard cuts diagonally
-// across the frame. 5.5 m is the tuned distance: at 6.5 m the BAR EL
-// FARO sign — 8 m north of the player — poked its west end into the
-// right edge, and at 4.5 m the sign was gone but the player ballooned
-// to ~200 px and dominated the frame; at 5.5 m the sign clears the
-// edge by ~20 px and the player stays a foreground figure, not the
-// subject.
+// Combat camera: a fixed side-on pose from the live positions, so
+// the frame is composed rather than left to the follow camera.
+// 5.5 m behind the player, 2.2 m to the side, 3.1 m up, looking at
+// the framed guard's chest: the guard lands at screen centre —
+// where the crosshair lives — the player sits off-centre in the
+// foreground, and the tracer to the far guard cuts diagonally
+// across the frame. Tuned by projection, verified by eye.
 function combatShotCam(world, guard) {
   const p = world.player.state;
   const dx = guard.x - p.x, dz = guard.z - p.z;
@@ -190,28 +183,26 @@ function combatShotCam(world, guard) {
 // the player again.
 export const FOOT_CAR_OFFSET = { dx: -2.4, dz: -1.3 };
 
-// Combat background traffic: cars on the roads behind the fight, so
-// the harbor shot is not an empty lot. All three sit on real road
-// lines (x = -150 vertical, z = 110 coastal) and project into the
-// frame's background (verified by projection against the combat
-// camera) without touching the framed guard's screen box.
+// Combat background traffic: cars on the z=58 road far behind the
+// fight, so the harbor shot is not an empty lot. All three sit on a
+// real road line and project into the frame's background (verified by
+// projection against the combat camera) without touching the framed
+// guard's screen box.
 export const COMBAT_BACKGROUND_TRAFFIC = [
-  { x: -150, z: 92, heading: Math.PI }, // north on the x=-150 road, right background
-  { x: -150, z: 84, heading: Math.PI }, // further north, far-right edge
-  { x: -168, z: 110, heading: -Math.PI / 2 }, // west on the coastal road, mid-left
+  { x: -146, z: 58, heading: Math.PI / 2 }, // east on the z=58 road, centre background
+  { x: -124, z: 58, heading: Math.PI / 2 }, // further east, right background
+  { x: -168, z: 58, heading: Math.PI / 2 }, // west end, far-left edge
 ];
 
-// Combat pursuit staging: the responding units sit at genuinely
-// different ranges from the player instead of the spawn ring's four
-// identical 43 m. Offsets east along the coastal road; the distances
-// are computed live by policeStatus from these positions, never
-// hardcoded into the HUD. States are left exactly as the sim gave
-// them (PATROL here) — only positions are staged.
+// Combat pursuit: units at genuinely different ranges, staged
+// north up the x=-150 road so the north-looking camera sees them.
+// States are CHASE (wanted 5 — the response); distances come live
+// from policeStatus, never hardcoded into the HUD.
 export const COMBAT_PURSUIT_SPOTS = [
-  { dx: 18, dz: 1 },
-  { dx: 31, dz: 4 },
-  { dx: 47, dz: 1 },
-  { dx: 64, dz: 4 },
+  { dx: -6, dz: -16 },
+  { dx: -6, dz: -30 },
+  { dx: -6, dz: -48 },
+  { dx: -6, dz: -68 },
 ];
 
 export function stageCombatPursuit(world) {
@@ -221,7 +212,11 @@ export function stageCombatPursuit(world) {
     const spot = COMBAT_PURSUIT_SPOTS[i % COMBAT_PURSUIT_SPOTS.length];
     unit.car.x = p.x + spot.dx;
     unit.car.z = p.z + spot.dz;
-    unit.car.heading = Math.PI / 2;
+    unit.car.heading = 0; // south, driving toward the fight
+    unit.state = 'CHASE';
+    unit.stateTimer = 0;
+    unit.unseenTimer = 0;
+    unit.lastKnown = { x: p.x, z: p.z };
   });
 }
 
@@ -370,7 +365,7 @@ export function stageShot(name, world) {
       ped.route = null; ped.state = 'WALK';
     });
     const p = world.player.state;
-    world.placePlayer(-141, 109);
+    world.placePlayer(-144, 112);
     const living = () => world.combat.enemies.filter((e) => e.hp > 0);
     const byDist = (list) => [...list].sort((a, b) =>
       Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z));
